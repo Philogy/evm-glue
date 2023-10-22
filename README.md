@@ -99,7 +99,7 @@ The overarching API is that you create a list of assembly blocks (`Vec<Asm>`) an
 `assembler::assemble_full` that then turns it into one long string of bytecode. Blocks and their 
 types are found under `evm_glue::assembly`.
 
-### Executing the assembler (`assembler::assemble_full`)
+### Assembling (`assembler::assemble_full`)
 
 The `assemble_full` is the main entry point for assembling a string of assembly blocks, it takes two
 arguments:
