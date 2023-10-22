@@ -28,6 +28,7 @@ use evm_glue::data;
 use evm_glue::opcodes::Opcode::*;
 use evm_glue::utils::MarkTracker;
 use hex_literal::hex as hx;
+use Asm::*;
 
 fn main() {
     let mut runtime_marks = MarkTracker::new();
@@ -36,30 +37,30 @@ fn main() {
 
     let runtime = vec![
         // Load x, y
-        Asm::op(PUSH0),
-        Asm::op(CALLDATALOAD), // x
-        Asm::op(PUSH1(hx!("20"))),
-        Asm::op(CALLDATALOAD), // x, y
+        Op(PUSH0),
+        Op(CALLDATALOAD), // x
+        Op(PUSH1(hx!("20"))),
+        Op(CALLDATALOAD), // x, y
         // Add and check for overflow
-        Asm::op(DUP2),           // x, y, x
-        Asm::op(ADD),            // x, r
-        Asm::op(DUP1),           // x, r, r
-        Asm::op(SWAP2),          // r, r, x
-        Asm::op(GT),             // r, x > r
+        Op(DUP2),                // x, y, x
+        Op(ADD),                 // x, r
+        Op(DUP1),                // x, r, r
+        Op(SWAP2),               // r, r, x
+        Op(GT),                  // r, x > r
         Asm::mref(empty_revert), // r, x > r, l
-        Asm::op(JUMPI),          // r
+        Op(JUMPI),               // r
         // Return result.
-        Asm::op(MSIZE),
-        Asm::op(MSTORE),
-        Asm::op(MSIZE),
-        Asm::op(PUSH0),
-        Asm::op(RETURN),
+        Op(MSIZE),
+        Op(MSTORE),
+        Op(MSIZE),
+        Op(PUSH0),
+        Op(RETURN),
         // Revert
-        Asm::mark(empty_revert),
-        Asm::op(JUMPDEST),
-        Asm::op(PUSH0),
-        Asm::op(PUSH0),
-        Asm::op(REVERT),
+        Mark(empty_revert),
+        Op(JUMPDEST),
+        Op(PUSH0),
+        Op(PUSH0),
+        Op(REVERT),
     ];
 
     let runtime_bytecode = assemble_full(&runtime).unwrap();
@@ -71,16 +72,16 @@ fn main() {
     let deploy = vec![
         // Constructor
         Asm::delta_ref(runtime_start, runtime_end), // rt_size
-        Asm::op(DUP1),                              // rt_size, rt_size
+        Op(DUP1),                                   // rt_size, rt_size
         Asm::mref(runtime_start),                   // rt_size, rt_size, rt_start
-        Asm::op(RETURNDATASIZE),                    // rt_size, rt_size, rt_start, 0
-        Asm::op(CODECOPY),                          // rt_size
-        Asm::op(RETURNDATASIZE),                    // rt_size, 0
-        Asm::op(RETURN),                            // -- end
+        Op(RETURNDATASIZE),                         // rt_size, rt_size, rt_start, 0
+        Op(CODECOPY),                               // rt_size
+        Op(RETURNDATASIZE),                         // rt_size, 0
+        Op(RETURN),                                 // -- end
         // Runtime body
-        Asm::mark(runtime_start),
-        Asm::data(runtime_bytecode.clone()),
-        Asm::mark(runtime_end),
+        Mark(runtime_start),
+        Data(runtime_bytecode.clone()),
+        Mark(runtime_end),
         // Random metadata padded to 32-bytes, will not be included in returned runtime bytecode.
         Asm::padded_back(32, vec![data!("49203c3320796f75203a29")]),
     ];
@@ -104,24 +105,18 @@ Op "blocks" indicate individual opcodes. For PUSH1-PUSH32 operations this alread
 immediate push value e.g.:
 
 ```rust
-use evm_glue::assembly::Asm;
+use evm_glue::assembly::Asm::*;
 use evm_glue::opcodes::Opcode::*;
 // `hex_literal` is a recommended helper library
 use hex_literal::hex;
 
 let asm = vec![
-    Asm::op(PUSH1(hx!("20"))),
-    Asm::op(CALLDATALOAD),
-    Asm::op(DUP2),
-    Asm::op(PUSH5(hex!("0000138302"))),
+    Op(PUSH1(hx!("20"))),
+    Op(CALLDATALOAD),
+    Op(DUP2),
+    Op(PUSH5(hex!("0000138302"))),
 ]
 ```
-
-**`Asm::op`**
-
-`Asm::op` is a helper function that creates a `Asm::Sized(StaticSizeAsm<Asm>::Op)` object. It takes
-an `Opcode` object as an input. In the above example a star-import was used to minimize verbosity
-(e.g. just `CALLDATALOAD` instead of `Opcode::CALLDATALOAD`).
 
 ### Marks & References
 
@@ -134,10 +129,10 @@ Marks generate 0 bytecode and are simply an indicator for the assembler. They co
 `usize` "mark id" (referenced as `mid` in the code):
 
 ```rust
-use evm_glue::assembly::Asm;
+use evm_glue::assembly::Asm::*;
 
 let asm = vec![
-    Asm::mark(3)
+    Mark(3)
 ];
 ```
 > [!IMPORTANT]  
@@ -152,7 +147,7 @@ worrying about duplicates:
 
 ```rust
 use evm_glue::utils::MarkTracker;
-use evm_glue::assembly::Asm;
+use evm_glue::assembly::Asm::*;
 
 let mut mt = MarkTracker::new();
 
@@ -160,9 +155,9 @@ let label1 = mt.next();       // 0
 let empty_revert = mt.next(); // 1
 
 let asm = vec![
-    Asm::mark(label1),
+    Mark(label1),
     // ...
-    Asm::mark(empty_revert),
+    Mark(empty_revert),
     // ...
 ];
 
@@ -207,6 +202,18 @@ Literal helpers are `Asm::mref_literal` and `Asm::delta_ref_literal` respectivel
 Data blocks are just continuous sequences of bytecode to be directly inserted into the final output.
 This can be other compiled contracts, metadata or even lookup tables.
 
+To insert a byte stream (`Vec<u8>`) as data you can use the `Asm::Data` enum member:
+
+```rust
+use evm_glue::assembly::Asm::*;
+
+let runtime_bytecode: Vec<u8> = /* some bytecode */;
+
+let asm = vec![
+    Data(runtime_bytecode.clone())
+];
+```
+
 **`data!` macro**
 
 You can use the `evm_glue::data` macro to directly specify a hex literal as data:
@@ -216,20 +223,6 @@ use evm_glue::data;
 
 let asm = vec![
     data!("0283")
-];
-```
-
-**`Asm::data` helper**
-
-To insert a byte stream (`Vec<u8>`) as data you can use the `Asm::data` helper:
-
-```rust
-use evm_glue::assembly::Asm;
-
-let runtime_bytecode: Vec<u8> = /* some bytecode */;
-
-let asm = vec![
-    Asm::data(runtime_bytecode.clone())
 ];
 ```
 

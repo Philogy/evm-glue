@@ -1,10 +1,9 @@
-use crate::assembly::{
-    Asm, FullMarkRef, MarkReference as MRef, PadSide, ReferenceRepresentation as RR, StaticSizeAsm,
-};
+use crate::assembly::{Asm, PadSide, RefRepr, RefType};
+use crate::opcodes::Opcode;
 
 fn get_last_data(asm: &mut Vec<Asm>) -> Option<&mut Vec<u8>> {
     match asm.last_mut() {
-        Some(Asm::Sized(StaticSizeAsm::Data(ref mut d))) => Some(d),
+        Some(Asm::Data(ref mut d)) => Some(d),
         _ => None,
     }
 }
@@ -13,24 +12,21 @@ pub fn reduce_asm(asm: &Vec<Asm>) -> Vec<Asm> {
     let mut reduced_asm = Vec::new();
     for block in asm {
         match block {
-            Asm::Sized(sized) => match sized {
-                StaticSizeAsm::Op(op) => {
-                    let new_bytes: &mut Vec<u8> = match get_last_data(&mut reduced_asm) {
-                        Some(d) => d,
-                        None => {
-                            reduced_asm.push(Asm::data(Vec::new()));
-                            get_last_data(&mut reduced_asm).unwrap()
-                        }
-                    };
-                    op.append_to(new_bytes);
-                }
-                StaticSizeAsm::Data(d) => match get_last_data(&mut reduced_asm) {
-                    Some(last_d) => last_d.extend(d),
-                    None => reduced_asm.push(block.clone()),
-                },
-                _ => reduced_asm.push(block.clone()),
+            Asm::Op(op) => {
+                let new_bytes: &mut Vec<u8> = match get_last_data(&mut reduced_asm) {
+                    Some(d) => d,
+                    None => {
+                        reduced_asm.push(Asm::Data(Vec::new()));
+                        get_last_data(&mut reduced_asm).unwrap()
+                    }
+                };
+                op.append_to(new_bytes);
+            }
+            Asm::Data(d) => match get_last_data(&mut reduced_asm) {
+                Some(last_d) => last_d.extend(d),
+                None => reduced_asm.push(block.clone()),
             },
-            Asm::Unsized(_) => reduced_asm.push(block.clone()),
+            _ => reduced_asm.push(block.clone()),
         }
     }
     return reduced_asm;
@@ -92,34 +88,48 @@ pub enum AssembleError {
 
 fn get_and_validate_marks(asm: &Vec<Asm>, marks: &mut MarkMap<usize>) -> Result<(), AssembleError> {
     for block in asm {
-        if let Asm::Sized(iblock) = block {
-            match iblock {
-                StaticSizeAsm::Mark(mid) => {
-                    if !marks.add(*mid) {
-                        return Err(AssembleError::DuplicateMark(*mid));
-                    }
+        match block {
+            Asm::Mark(mid) => {
+                if !marks.add(*mid) {
+                    return Err(AssembleError::DuplicateMark(*mid));
                 }
-                StaticSizeAsm::PaddedBlock { blocks, .. } => {
-                    get_and_validate_marks(blocks, marks)?;
-                }
-                _ => {}
             }
+            Asm::PaddedBlock { blocks, .. } => {
+                get_and_validate_marks(blocks, marks)?;
+            }
+            _ => {}
         }
     }
 
     Ok(())
 }
 
+#[derive(Debug)]
 pub enum SizedAsm {
-    FixedSize(StaticSizeAsm<SizedAsm>),
-    VarSized { full_ref: FullMarkRef, size: usize },
+    Op(Opcode),
+    Data(Vec<u8>),
+    Mark(usize),
+    PaddedBlock {
+        size: usize,
+        padding: u8,
+        blocks: Vec<SizedAsm>,
+        side: PadSide,
+    },
+    Ref {
+        size: usize,
+        ref_type: RefType,
+        ref_repr: RefRepr,
+    },
 }
 
 impl SizedAsm {
     pub fn size(&self) -> usize {
         match self {
-            Self::FixedSize(ss_asm) => ss_asm.static_size(),
-            Self::VarSized { size, full_ref } => size + full_ref.rr.static_size(),
+            Self::Op(op) => op.len(),
+            Self::Data(d) => d.len(),
+            Self::Mark(_) => 0,
+            Self::PaddedBlock { size, .. } => *size,
+            Self::Ref { size, ref_repr, .. } => size + ref_repr.static_size(),
         }
     }
 }
@@ -132,16 +142,14 @@ where
 {
     for block in asm {
         match block {
-            Asm::Unsized(FullMarkRef { mref, .. }) => match mref {
-                MRef::Direct(mid) => validate_mid(*mid)?,
-                MRef::Delta(start_mid, end_mid) => {
+            Asm::Ref { ref_type, .. } => match ref_type {
+                RefType::Direct(mid) => validate_mid(*mid)?,
+                RefType::Delta(start_mid, end_mid) => {
                     validate_mid(*start_mid)?;
                     validate_mid(*end_mid)?;
                 }
             },
-            Asm::Sized(StaticSizeAsm::PaddedBlock { blocks, .. }) => {
-                validate_refs(&blocks, validate_mid)?
-            }
+            Asm::PaddedBlock { blocks, .. } => validate_refs(&blocks, validate_mid)?,
             _ => {}
         }
     }
@@ -166,7 +174,7 @@ pub fn validate_asm(asm: &Vec<Asm>) -> AssembleResult<()> {
 fn validate_padding(asm: &Vec<SizedAsm>) -> AssembleResult<usize> {
     asm.iter().fold(Ok(0), |maybe_offset, block| {
         let offset = maybe_offset?;
-        if let SizedAsm::FixedSize(StaticSizeAsm::PaddedBlock { size, blocks, .. }) = block {
+        if let SizedAsm::PaddedBlock { size, blocks, .. } = block {
             let full_size = validate_padding(blocks)?;
             if full_size > *size {
                 return Err(AssembleError::BytecodeExceedsPadding);
@@ -179,35 +187,34 @@ fn validate_padding(asm: &Vec<SizedAsm>) -> AssembleResult<usize> {
 fn get_total_refs(asm: &Vec<Asm>) -> usize {
     asm.iter()
         .map(|block| match block {
-            Asm::Unsized(FullMarkRef { .. }) => 1,
-            Asm::Sized(StaticSizeAsm::PaddedBlock { blocks, .. }) => get_total_refs(blocks),
+            Asm::Ref { .. } => 1,
+            Asm::PaddedBlock { blocks, .. } => get_total_refs(blocks),
             _ => 0,
         })
         .sum()
 }
 
-fn set_asm_size(asm: &Vec<Asm>, size: usize) -> Vec<SizedAsm> {
+fn set_asm_size(asm: &Vec<Asm>, new_size: usize) -> Vec<SizedAsm> {
     asm.iter()
         .map(|block| match block {
-            Asm::Sized(ss_asm) => SizedAsm::FixedSize(match ss_asm {
-                StaticSizeAsm::PaddedBlock {
-                    size,
-                    padding,
-                    blocks,
-                    side,
-                } => StaticSizeAsm::PaddedBlock {
-                    size: *size,
-                    padding: *padding,
-                    blocks: set_asm_size(blocks, *size),
-                    side: side.clone(),
-                },
-                StaticSizeAsm::Op(i) => StaticSizeAsm::Op(*i),
-                StaticSizeAsm::Mark(mid) => StaticSizeAsm::Mark(*mid),
-                StaticSizeAsm::Data(d) => StaticSizeAsm::Data(d.clone()),
-            }),
-            Asm::Unsized(full_ref) => SizedAsm::VarSized {
-                full_ref: full_ref.clone(),
+            Asm::PaddedBlock {
                 size,
+                padding,
+                blocks,
+                side,
+            } => SizedAsm::PaddedBlock {
+                size: *size,
+                padding: *padding,
+                side: side.clone(),
+                blocks: set_asm_size(blocks, new_size),
+            },
+            Asm::Op(i) => SizedAsm::Op(*i),
+            Asm::Mark(mid) => SizedAsm::Mark(*mid),
+            Asm::Data(d) => SizedAsm::Data(d.clone()),
+            Asm::Ref { ref_type, ref_repr } => SizedAsm::Ref {
+                ref_repr: ref_repr.clone(),
+                ref_type: ref_type.clone(),
+                size: new_size,
             },
         })
         .collect()
@@ -233,12 +240,10 @@ pub fn size_asm(asm: &Vec<Asm>) -> Vec<SizedAsm> {
 /// Expects `asm` to have been validated with
 fn build_mark_map(mmap: &mut MarkMap<usize>, asm: &Vec<SizedAsm>, start_offset: usize) -> usize {
     asm.iter().fold(start_offset, |offset, block| {
-        if let SizedAsm::FixedSize(ss_asm) = block {
-            if let StaticSizeAsm::Mark(mid) = ss_asm {
-                mmap.set(*mid, offset);
-            } else if let StaticSizeAsm::PaddedBlock { blocks, .. } = ss_asm {
-                build_mark_map(mmap, blocks, offset);
-            }
+        if let SizedAsm::Mark(mid) = block {
+            mmap.set(*mid, offset);
+        } else if let SizedAsm::PaddedBlock { blocks, .. } = block {
+            build_mark_map(mmap, blocks, offset);
         }
         offset + block.size()
     })
@@ -247,17 +252,18 @@ fn build_mark_map(mmap: &mut MarkMap<usize>, asm: &Vec<SizedAsm>, start_offset: 
 fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<SizedAsm>) {
     for block in asm {
         match block {
-            SizedAsm::VarSized {
-                full_ref: FullMarkRef { mref, rr },
+            SizedAsm::Ref {
                 size,
+                ref_type,
+                ref_repr,
             } => {
-                let value: usize = match mref {
-                    MRef::Direct(mid) => mmap.get_direct(*mid),
-                    MRef::Delta(start_mid, end_mid) => {
+                let value: usize = match ref_type {
+                    RefType::Direct(mid) => mmap.get_direct(*mid),
+                    RefType::Delta(start_mid, end_mid) => {
                         mmap.get_direct(*end_mid) - mmap.get_direct(*start_mid)
                     }
                 };
-                if let RR::Pushed = rr {
+                if let RefRepr::Pushed = ref_repr {
                     bytecode.push((0x60 + size - 1).try_into().unwrap());
                 }
                 let bytes = value.to_be_bytes();
@@ -269,32 +275,30 @@ fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<SizedAsm>) 
                     bytecode.extend(bytes);
                 }
             }
-            SizedAsm::FixedSize(ss_asm) => match ss_asm {
-                StaticSizeAsm::Op(op) => op.append_to(bytecode),
-                StaticSizeAsm::Data(data) => bytecode.extend(data),
-                StaticSizeAsm::Mark(_) => {}
-                StaticSizeAsm::PaddedBlock {
-                    size,
-                    padding,
-                    blocks,
-                    side,
-                } => {
-                    match side {
-                        PadSide::Back => {
-                            let len_before = bytecode.len();
-                            assemble(bytecode, mmap, blocks);
-                            // Add padding
-                            bytecode.resize(size + len_before, *padding);
-                        }
-                        PadSide::Front => {
-                            let mut block_code: Vec<u8> = Vec::with_capacity(*size);
-                            assemble(&mut block_code, mmap, blocks);
-                            bytecode.resize(bytecode.len() + size - block_code.len(), *padding);
-                            bytecode.extend(block_code);
-                        }
+            SizedAsm::Op(op) => op.append_to(bytecode),
+            SizedAsm::Data(data) => bytecode.extend(data),
+            SizedAsm::Mark(_) => {}
+            SizedAsm::PaddedBlock {
+                size,
+                padding,
+                blocks,
+                side,
+            } => {
+                match side {
+                    PadSide::Back => {
+                        let len_before = bytecode.len();
+                        assemble(bytecode, mmap, blocks);
+                        // Add padding
+                        bytecode.resize(size + len_before, *padding);
+                    }
+                    PadSide::Front => {
+                        let mut block_code: Vec<u8> = Vec::with_capacity(*size);
+                        assemble(&mut block_code, mmap, blocks);
+                        bytecode.resize(bytecode.len() + size - block_code.len(), *padding);
+                        bytecode.extend(block_code);
                     }
                 }
-            },
+            }
         }
     }
 }
@@ -332,29 +336,30 @@ mod tests {
     use hex_literal::hex as hx;
 
     use crate::opcodes::Opcode::*;
+    use Asm::*;
 
     #[test]
     fn test_reduce() {
         let asm = vec![
             Asm::delta_ref(0, 1),
-            Asm::op(DUP1),
+            Op(DUP1),
             Asm::mref(0),
-            Asm::op(RETURNDATASIZE),
-            Asm::op(CODECOPY),
-            Asm::op(RETURNDATASIZE),
-            Asm::op(RETURN),
-            Asm::mark(0),
-            Asm::op(PUSH0),
-            Asm::op(CALLDATALOAD),
-            Asm::op(PUSH1(hx!("20"))),
-            Asm::op(CALLDATALOAD),
-            Asm::op(ADD),
-            Asm::op(MSIZE),
-            Asm::op(MSTORE),
-            Asm::op(MSIZE),
-            Asm::op(PUSH0),
-            Asm::op(RETURN),
-            Asm::mark(1),
+            Op(RETURNDATASIZE),
+            Op(CODECOPY),
+            Op(RETURNDATASIZE),
+            Op(RETURN),
+            Mark(0),
+            Op(PUSH0),
+            Op(CALLDATALOAD),
+            Op(PUSH1(hx!("20"))),
+            Op(CALLDATALOAD),
+            Op(ADD),
+            Op(MSIZE),
+            Op(MSTORE),
+            Op(MSIZE),
+            Op(PUSH0),
+            Op(RETURN),
+            Mark(1),
             Asm::padded_back(64, vec![data!("010203")]),
         ];
         for block in &asm {
