@@ -55,6 +55,7 @@ pub enum Asm {
         side: PadSide,
     },
     Ref {
+        size: Option<usize>,
         ref_type: RefType,
         ref_repr: RefRepr,
     },
@@ -66,9 +67,15 @@ impl fmt::Display for Asm {
             Data(d) => write!(f, "0x{}", hex::encode(d)),
             Op(i) => write!(f, "{}", i),
             Mark(mid) => write!(f, "#{}:", mid),
-            Ref { ref_type, ref_repr } => match ref_repr {
-                Literal => write!(f, "({})", ref_type),
-                Pushed => write!(f, "PUSH {}", ref_type),
+            Ref {
+                ref_type,
+                ref_repr,
+                size: maybe_size,
+            } => match (ref_repr, maybe_size) {
+                (Literal, Some(size)) => write!(f, "[{}] ({})", size, ref_type),
+                (Pushed, Some(size)) => write!(f, "PUSH{} {}", size, ref_type),
+                (Literal, None) => write!(f, "({})", ref_type),
+                (Pushed, None) => write!(f, "PUSH {}", ref_type),
             },
             _ => write!(f, "{:?}", self),
         }
@@ -88,10 +95,18 @@ impl Asm {
         }
     }
 
+    pub fn size(&self) -> Option<usize> {
+        match self {
+            Ref { ref_repr, size, .. } => size.map(|x| x + ref_repr.static_size()),
+            _ => Some(self.static_size()),
+        }
+    }
+
     pub fn mref(mid: usize) -> Self {
         Ref {
             ref_type: RefType::Direct(mid),
             ref_repr: RefRepr::Pushed,
+            size: None,
         }
     }
 
@@ -99,6 +114,7 @@ impl Asm {
         Ref {
             ref_type: RefType::Delta(start_mid, end_mid),
             ref_repr: RefRepr::Pushed,
+            size: None,
         }
     }
 
@@ -106,6 +122,7 @@ impl Asm {
         Ref {
             ref_type: RefType::Direct(mid),
             ref_repr: RefRepr::Literal,
+            size: None,
         }
     }
 
@@ -113,6 +130,7 @@ impl Asm {
         Ref {
             ref_type: RefType::Delta(start_mid, end_mid),
             ref_repr: RefRepr::Literal,
+            size: None,
         }
     }
 

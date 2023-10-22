@@ -1,5 +1,4 @@
 use crate::assembly::{Asm, PadSide, RefRepr, RefType};
-use crate::opcodes::Opcode;
 
 fn get_last_data(asm: &mut Vec<Asm>) -> Option<&mut Vec<u8>> {
     match asm.last_mut() {
@@ -104,38 +103,6 @@ fn get_and_validate_marks(asm: &Vec<Asm>, marks: &mut MarkMap<usize>) -> Result<
     Ok(())
 }
 
-/// Members duplicated from `Asm` in favor of having a more shallow type, which avoids nested match
-/// statements in functions.
-#[derive(Debug)]
-pub enum SizedAsm {
-    Op(Opcode),
-    Data(Vec<u8>),
-    Mark(usize),
-    PaddedBlock {
-        size: usize,
-        padding: u8,
-        blocks: Vec<SizedAsm>,
-        side: PadSide,
-    },
-    Ref {
-        size: usize,
-        ref_type: RefType,
-        ref_repr: RefRepr,
-    },
-}
-
-impl SizedAsm {
-    pub fn size(&self) -> usize {
-        match self {
-            Self::Op(op) => op.len(),
-            Self::Data(d) => d.len(),
-            Self::Mark(_) => 0,
-            Self::PaddedBlock { size, .. } => *size,
-            Self::Ref { size, ref_repr, .. } => size + ref_repr.static_size(),
-        }
-    }
-}
-
 type AssembleResult<T> = Result<T, AssembleError>;
 
 fn validate_refs<F>(asm: &Vec<Asm>, validate_mid: &F) -> AssembleResult<()>
@@ -173,16 +140,17 @@ pub fn validate_asm(asm: &Vec<Asm>) -> AssembleResult<()> {
     })
 }
 
-fn validate_padding(asm: &Vec<SizedAsm>) -> AssembleResult<usize> {
+/// Assumes that the size for all refs in `asm` has been set.
+fn validate_padding(asm: &Vec<Asm>) -> AssembleResult<usize> {
     asm.iter().fold(Ok(0), |maybe_offset, block| {
         let offset = maybe_offset?;
-        if let SizedAsm::PaddedBlock { size, blocks, .. } = block {
+        if let Asm::PaddedBlock { size, blocks, .. } = block {
             let full_size = validate_padding(blocks)?;
             if full_size > *size {
                 return Err(AssembleError::BytecodeExceedsPadding);
             }
         }
-        Ok(offset + block.size())
+        Ok(offset + block.size().expect("Unsized block in asm"))
     })
 }
 
@@ -196,69 +164,52 @@ fn get_total_refs(asm: &Vec<Asm>) -> usize {
         .sum()
 }
 
-fn set_asm_size(asm: &Vec<Asm>, new_size: usize) -> Vec<SizedAsm> {
-    asm.iter()
-        .map(|block| match block {
-            Asm::PaddedBlock {
-                size,
-                padding,
-                blocks,
-                side,
-            } => SizedAsm::PaddedBlock {
-                size: *size,
-                padding: *padding,
-                side: side.clone(),
-                blocks: set_asm_size(blocks, new_size),
-            },
-            Asm::Op(i) => SizedAsm::Op(*i),
-            Asm::Mark(mid) => SizedAsm::Mark(*mid),
-            Asm::Data(d) => SizedAsm::Data(d.clone()),
-            Asm::Ref { ref_type, ref_repr } => SizedAsm::Ref {
-                ref_repr: ref_repr.clone(),
-                ref_type: ref_type.clone(),
-                size: new_size,
-            },
-        })
-        .collect()
+fn set_size_of_all_refs(asm: &mut Vec<Asm>, new_size: usize) {
+    asm.iter_mut().for_each(|block| match block {
+        Asm::PaddedBlock { blocks, .. } => set_size_of_all_refs(blocks, new_size),
+        Asm::Ref { size, .. } => *size = Some(new_size),
+        _ => {}
+    });
 }
 
-// Making assembly "sized" should maybe be a type conversion, whereby the refs in the base `Asm`
-// enum do not have sized but they do in their "sized" counterpart. This would allow for compile
-// time type checking to differentiate between sized/unsized, however this would seemingly also
-// lead to a lot of code duplication
-pub fn size_asm(asm: &Vec<Asm>) -> Vec<SizedAsm> {
+pub fn set_minimum_ref_size(asm: &mut Vec<Asm>) {
     let total_static_size: usize = asm.iter().map(|b| b.static_size()).sum();
     let total_refs = get_total_refs(asm);
 
     let mut min_ref_size = 1;
 
+    // Maximum offset that can be represented is 2^(8 * min_ref_size) - 1.
+    // Total minimum code size is the base static size + the bytes required to store all offsets
+    // (min_ref_size * total_refs).
     while (1 << (8 * min_ref_size)) - 1 < total_static_size + min_ref_size * total_refs {
         min_ref_size += 1;
     }
 
-    return set_asm_size(asm, min_ref_size);
+    return set_size_of_all_refs(asm, min_ref_size);
 }
 
-/// Expects `asm` to have been validated with
-fn build_mark_map(mmap: &mut MarkMap<usize>, asm: &Vec<SizedAsm>, start_offset: usize) -> usize {
+/// Expects `Asm` to have been validated with `validate_asm` and that the sizes for all refs have
+/// been set.
+fn build_mark_map(mmap: &mut MarkMap<usize>, asm: &Vec<Asm>, start_offset: usize) -> usize {
     asm.iter().fold(start_offset, |offset, block| {
-        if let SizedAsm::Mark(mid) = block {
+        if let Asm::Mark(mid) = block {
             mmap.set(*mid, offset);
-        } else if let SizedAsm::PaddedBlock { blocks, .. } = block {
+        } else if let Asm::PaddedBlock { blocks, .. } = block {
             build_mark_map(mmap, blocks, offset);
         }
-        offset + block.size()
+        offset + block.size().expect("Unsized block in asm")
     })
 }
 
-fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<SizedAsm>) {
+fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<Asm>) {
     for block in asm {
         match block {
-            SizedAsm::Ref {
-                size,
+            Asm::Ref {
+                size: maybe_size,
                 ref_type,
                 ref_repr,
             } => {
+                let size = maybe_size.expect("Unsized block in asm");
                 let value: usize = match ref_type {
                     RefType::Direct(mid) => mmap.get_direct(*mid),
                     RefType::Delta(start_mid, end_mid) => {
@@ -269,7 +220,7 @@ fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<SizedAsm>) 
                     bytecode.push((0x60 + size - 1).try_into().unwrap());
                 }
                 let bytes = value.to_be_bytes();
-                if bytes.len() > *size {
+                if bytes.len() > size {
                     bytecode.extend(&bytes[(bytes.len() - size)..]);
                 } else {
                     // Add padding
@@ -277,10 +228,10 @@ fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<SizedAsm>) 
                     bytecode.extend(bytes);
                 }
             }
-            SizedAsm::Op(op) => op.append_to(bytecode),
-            SizedAsm::Data(data) => bytecode.extend(data),
-            SizedAsm::Mark(_) => {}
-            SizedAsm::PaddedBlock {
+            Asm::Op(op) => op.append_to(bytecode),
+            Asm::Data(data) => bytecode.extend(data),
+            Asm::Mark(_) => {}
+            Asm::PaddedBlock {
                 size,
                 padding,
                 blocks,
@@ -306,7 +257,7 @@ fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<SizedAsm>) 
 }
 
 // Expects validated assembly, TODO: Fix validation to recurse into padded blocks
-fn assemble_sized(asm: &Vec<SizedAsm>) -> Result<Vec<u8>, AssembleError> {
+fn assemble_sized(asm: &Vec<Asm>) -> Result<Vec<u8>, AssembleError> {
     let mut mmap: MarkMap<usize> = MarkMap::new();
     // PaddedBlock size validation already done in `build_mark_map`.
     let end_offset = build_mark_map(&mut mmap, asm, 0);
@@ -317,15 +268,15 @@ fn assemble_sized(asm: &Vec<SizedAsm>) -> Result<Vec<u8>, AssembleError> {
     Ok(bytecode)
 }
 
-pub fn assemble_full(asm: &Vec<Asm>) -> Result<Vec<u8>, AssembleError> {
-    validate_asm(asm)?;
+pub fn assemble_full(asm: &mut Vec<Asm>) -> Result<Vec<u8>, AssembleError> {
+    validate_asm(&asm)?;
 
-    let sized = size_asm(&asm);
+    set_minimum_ref_size(asm);
 
-    validate_padding(&sized)?;
+    validate_padding(&asm)?;
 
     // TODO: Add reference push size reducer e.g. PUSH #2 => PUSH2 0x0027 => PUSH1 0x27
-    assemble_sized(&sized)
+    assemble_sized(&asm)
 }
 
 #[cfg(test)]
@@ -342,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_reduce() {
-        let asm = vec![
+        let mut asm = vec![
             Asm::delta_ref(0, 1),
             Op(DUP1),
             Asm::mref(0),
@@ -377,7 +328,7 @@ mod tests {
             println!("{}", block);
         }
 
-        let out = assemble_sized(&size_asm(&reduced)).unwrap();
+        let out = assemble_full(&mut asm).unwrap();
 
         println!("\n\ncompiled: {}", hex::encode(out));
     }
