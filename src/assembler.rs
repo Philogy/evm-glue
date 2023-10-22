@@ -25,15 +25,15 @@ impl<T: Default + Clone> MarkMap<T> {
         }
     }
 
-    fn get(&self, idx: usize) -> &Option<T> {
+    fn get_maybe(&self, idx: usize) -> &Option<T> {
         match self.0.get(idx) {
             Some(v) => v,
             None => &None,
         }
     }
 
-    fn get_direct(&self, idx: usize) -> T {
-        self.get(idx)
+    fn get(&self, idx: usize) -> T {
+        self.get_maybe(idx)
             .clone()
             .expect("Contained invalid mark reference")
     }
@@ -43,6 +43,15 @@ impl<T: Default + Clone> MarkMap<T> {
             true
         } else {
             false
+        }
+    }
+}
+
+impl MarkMap<usize> {
+    fn lookup_value(&self, ref_type: &RefType) -> usize {
+        match ref_type {
+            RefType::Direct(mid) => self.get(*mid),
+            RefType::Delta(start_mid, end_mid) => self.get(*end_mid) - self.get(*start_mid),
         }
     }
 }
@@ -129,7 +138,7 @@ fn get_total_refs(asm: &Vec<Asm>) -> usize {
     total_refs
 }
 
-pub fn set_minimum_ref_size(asm: &mut Vec<Asm>) {
+fn set_minimum_ref_size(asm: &mut Vec<Asm>) {
     let total_static_size: usize = asm.iter().map(|b| b.static_size()).sum();
     let total_refs = get_total_refs(asm);
 
@@ -167,12 +176,7 @@ fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<Asm>) {
                 ref_repr,
             }) => {
                 let size = maybe_size.expect("Unsized block in asm");
-                let value: usize = match ref_type {
-                    RefType::Direct(mid) => mmap.get_direct(*mid),
-                    RefType::Delta(start_mid, end_mid) => {
-                        mmap.get_direct(*end_mid) - mmap.get_direct(*start_mid)
-                    }
-                };
+                let value: usize = mmap.lookup_value(ref_type);
                 if let RefRepr::Pushed = ref_repr {
                     bytecode.push((0x60 + size - 1).try_into().unwrap());
                 }
@@ -213,27 +217,55 @@ fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<Asm>) {
     }
 }
 
-// Expects validated assembly, TODO: Fix validation to recurse into padded blocks
-fn assemble_sized(asm: &Vec<Asm>) -> Result<Vec<u8>, AssembleError> {
-    let mut mmap: MarkMap<usize> = MarkMap::new();
-    // PaddedBlock size validation already done in `build_mark_map`.
-    let end_offset = build_mark_map(&mut mmap, asm, 0);
-    let mut bytecode: Vec<u8> = Vec::with_capacity(end_offset);
-
-    assemble(&mut bytecode, &mmap, asm);
-
-    Ok(bytecode)
+fn min_ref_size(offset: usize) -> usize {
+    let mut ref_size = 1;
+    while (1 << (8 * ref_size)) - 1 < offset {
+        ref_size += 1;
+    }
+    ref_size
 }
 
-pub fn assemble_full(asm: &mut Vec<Asm>) -> Result<Vec<u8>, AssembleError> {
+fn minimize_ref_sizes(asm: &mut Vec<Asm>) -> (MarkMap<usize>, usize) {
+    let mut mmap: MarkMap<usize> = MarkMap::new();
+    let mut total_size: usize = 0;
+
+    let mut remaining_changes = true;
+    while remaining_changes {
+        remaining_changes = false;
+        total_size = build_mark_map(&mut mmap, &asm, 0);
+        for_each_mref_mut(asm, &mut |mref| {
+            let required_size = min_ref_size(mmap.lookup_value(&mref.ref_type));
+            if mref.size.expect("Unsized block") != required_size {
+                mref.size = Some(required_size);
+                remaining_changes = true;
+            }
+        });
+    }
+
+    (mmap, total_size)
+}
+
+pub fn assemble_full(asm: &mut Vec<Asm>, minimize_refs: bool) -> AssembleResult<Vec<u8>> {
     validate_asm(&asm)?;
 
     set_minimum_ref_size(asm);
 
     validate_padding(&asm)?;
 
-    // TODO: Add reference push size reducer e.g. PUSH #2 => PUSH2 0x0027 => PUSH1 0x27
-    assemble_sized(&asm)
+    let (mmap, total_size) = if minimize_refs {
+        minimize_ref_sizes(asm)
+    } else {
+        let mut mmap: MarkMap<usize> = MarkMap::new();
+        let total_size = build_mark_map(&mut mmap, &asm, 0);
+
+        (mmap, total_size)
+    };
+
+    let mut bytecode = Vec::with_capacity(total_size);
+
+    assemble(&mut bytecode, &mmap, asm);
+
+    Ok(bytecode)
 }
 
 #[cfg(test)]
@@ -276,14 +308,23 @@ mod tests {
             println!("{}", block);
         }
 
-        let out = assemble_full(&mut asm).unwrap();
+        let out = assemble_full(&mut asm, true).unwrap();
 
         println!("\n\ncompiled: {}", hex::encode(out));
     }
 
+    #[test]
+    fn test_adjusting_offset() {
+        let mut asm = vec![
+            Mark(0),
+            Op(JUMPDEST),
+            Asm::padded_back(256, vec![]),
+            Asm::mref(0),
+            Mark(1),
+            Asm::mref(1),
+        ];
 
-        let out = assemble_full(&mut asm).unwrap();
-
-        println!("\n\ncompiled: {}", hex::encode(out));
+        let out = assemble_full(&mut asm, true).unwrap();
+        assert_eq!(out, hx!("5b000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006000610103"));
     }
 }

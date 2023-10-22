@@ -12,8 +12,8 @@ a certain length.
   - ✅ Marks & References (e.g. for jump destinations, code sections)
 - ✅ Extra Building Blocks
   - ✅ Padded Blocks
-- ❌ Assembly Optimizations
-  - ❌ Reference push/literal size reduction (e.g. reduce `PUSH2 0x0017` => `PUSH1 0x17` for
+- ✅ Assembly Optimizations
+  - ✅ Reference push/literal size reduction (e.g. reduce `PUSH2 0x0017` => `PUSH1 0x17` for
     references)
 
 **Other TODOs:**
