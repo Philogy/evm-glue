@@ -1,53 +1,41 @@
 use crate::assembly::{for_each_mref, for_each_mref_mut, Asm, MarkRef, PadSide, RefRepr, RefType};
 
-struct MarkMap<T>(Vec<Option<T>>);
+struct MarkMap(Vec<Option<usize>>);
 
-impl<T: Default + Clone> MarkMap<T> {
+impl MarkMap {
     fn new() -> Self {
         Self(Vec::new())
     }
 
-    fn add(&mut self, idx: usize) -> bool {
-        self.set(idx, T::default())
-    }
-
-    fn set(&mut self, idx: usize, value: T) -> bool {
-        let arr: &mut Vec<Option<T>> = &mut self.0;
+    fn set(&mut self, idx: usize, offset: usize) -> bool {
+        let arr = &mut self.0;
 
         if idx >= arr.len() {
             arr.resize(idx, None);
-            arr.push(Some(value));
+            arr.push(Some(offset));
             true
         } else {
             let new_set = arr[idx].is_none();
-            arr[idx] = Some(value);
+            arr[idx] = Some(offset);
             new_set
         }
     }
 
-    fn get_maybe(&self, idx: usize) -> &Option<T> {
+    fn get_maybe(&self, idx: usize) -> &Option<usize> {
         match self.0.get(idx) {
             Some(v) => v,
             None => &None,
         }
     }
 
-    fn get(&self, idx: usize) -> T {
+    fn get(&self, idx: usize) -> usize {
         self.get_maybe(idx)
             .clone()
             .expect("Contained invalid mark reference")
     }
-
-    fn contains(&self, idx: usize) -> bool {
-        if let Some(Some(_)) = self.0.get(idx) {
-            true
-        } else {
-            false
-        }
-    }
 }
 
-impl MarkMap<usize> {
+impl MarkMap {
     fn lookup_value(&self, ref_type: &RefType) -> usize {
         match ref_type {
             RefType::Direct(mid) => self.get(*mid),
@@ -60,40 +48,46 @@ impl MarkMap<usize> {
 pub enum AssembleError {
     DuplicateMark(usize),
     InvalidMarkReference(usize),
+    DeltaStartAfterEnd(usize, usize),
     BytecodeExceedsPadding,
 }
 
-fn get_and_validate_marks(asm: &Vec<Asm>, marks: &mut MarkMap<usize>) -> Result<(), AssembleError> {
-    for block in asm {
-        match block {
-            Asm::Mark(mid) => {
-                if !marks.add(*mid) {
-                    return Err(AssembleError::DuplicateMark(*mid));
-                }
+fn get_and_validate_marks(
+    mmap: &mut MarkMap,
+    asm: &Vec<Asm>,
+    start_offset: usize,
+) -> Result<usize, AssembleError> {
+    asm.iter().fold(Ok(start_offset), |maybe_offset, block| {
+        let offset = maybe_offset?;
+        if let Asm::Mark(mid) = block {
+            if !mmap.set(*mid, offset) {
+                return Err(AssembleError::DuplicateMark(*mid));
             }
-            Asm::PaddedBlock { blocks, .. } => {
-                get_and_validate_marks(blocks, marks)?;
-            }
-            _ => {}
+        } else if let Asm::PaddedBlock { blocks, .. } = block {
+            build_mark_map(mmap, blocks, offset);
         }
-    }
-
-    Ok(())
+        Ok(offset + block.size().unwrap_or(0))
+    })
 }
 
 pub type AssembleResult<T> = Result<T, AssembleError>;
 
 fn validate_refs<F>(asm: &Vec<Asm>, validate_mid: &F) -> AssembleResult<()>
 where
-    F: Fn(usize) -> AssembleResult<()>,
+    F: Fn(usize) -> AssembleResult<usize>,
 {
     for block in asm {
         match block {
             Asm::Ref(MarkRef { ref_type, .. }) => match ref_type {
-                RefType::Direct(mid) => validate_mid(*mid)?,
+                RefType::Direct(mid) => {
+                    validate_mid(*mid)?;
+                }
                 RefType::Delta(start_mid, end_mid) => {
-                    validate_mid(*start_mid)?;
-                    validate_mid(*end_mid)?;
+                    let start_offset = validate_mid(*start_mid)?;
+                    let end_offset = validate_mid(*end_mid)?;
+                    if end_offset < start_offset {
+                        return Err(AssembleError::DeltaStartAfterEnd(*start_mid, *end_mid));
+                    }
                 }
             },
             Asm::PaddedBlock { blocks, .. } => validate_refs(&blocks, validate_mid)?,
@@ -105,16 +99,13 @@ where
 }
 
 pub fn validate_asm(asm: &Vec<Asm>) -> AssembleResult<()> {
-    let mut marks: MarkMap<usize> = MarkMap::new();
+    let mut mmap = MarkMap::new();
 
-    get_and_validate_marks(asm, &mut marks)?;
+    get_and_validate_marks(&mut mmap, asm, 0)?;
 
     validate_refs(asm, &|mid: usize| {
-        if marks.contains(mid) {
-            Ok(())
-        } else {
-            Err(AssembleError::InvalidMarkReference(mid))
-        }
+        mmap.get_maybe(mid)
+            .ok_or(AssembleError::InvalidMarkReference(mid))
     })
 }
 
@@ -144,10 +135,10 @@ fn set_minimum_ref_size(asm: &mut Vec<Asm>) {
 
     let mut min_ref_size = 1;
 
-    // Maximum offset that can be represented is 2^(8 * min_ref_size) - 1.
+    // Maximum offset that can be represented is 2**(8 * min_ref_size).
     // Total minimum code size is the base static size + the bytes required to store all offsets
     // (min_ref_size * total_refs).
-    while (1 << (8 * min_ref_size)) - 1 < total_static_size + min_ref_size * total_refs {
+    while (1 << (8 * min_ref_size)) < total_static_size + min_ref_size * total_refs {
         min_ref_size += 1;
     }
 
@@ -156,7 +147,7 @@ fn set_minimum_ref_size(asm: &mut Vec<Asm>) {
 
 /// Expects `Asm` to have been validated with `validate_asm` and that the sizes for all refs have
 /// been set.
-fn build_mark_map(mmap: &mut MarkMap<usize>, asm: &Vec<Asm>, start_offset: usize) -> usize {
+fn build_mark_map(mmap: &mut MarkMap, asm: &Vec<Asm>, start_offset: usize) -> usize {
     asm.iter().fold(start_offset, |offset, block| {
         if let Asm::Mark(mid) = block {
             mmap.set(*mid, offset);
@@ -167,7 +158,7 @@ fn build_mark_map(mmap: &mut MarkMap<usize>, asm: &Vec<Asm>, start_offset: usize
     })
 }
 
-fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<Asm>) {
+fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap, asm: &Vec<Asm>) {
     for block in asm {
         match block {
             Asm::Ref(MarkRef {
@@ -180,6 +171,7 @@ fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<Asm>) {
                 if let RefRepr::Pushed = ref_repr {
                     bytecode.push((0x60 + size - 1).try_into().unwrap());
                 }
+                // TODO: Make value => bytes + padding more elegant.
                 let bytes = value.to_be_bytes();
                 if bytes.len() > size {
                     bytecode.extend(&bytes[(bytes.len() - size)..]);
@@ -225,8 +217,8 @@ fn min_ref_size(offset: usize) -> usize {
     ref_size
 }
 
-fn minimize_ref_sizes(asm: &mut Vec<Asm>) -> (MarkMap<usize>, usize) {
-    let mut mmap: MarkMap<usize> = MarkMap::new();
+fn minimize_ref_sizes(asm: &mut Vec<Asm>) -> (MarkMap, usize) {
+    let mut mmap = MarkMap::new();
     let mut total_size: usize = 0;
 
     let mut remaining_changes = true;
@@ -256,7 +248,7 @@ pub fn assemble_full(asm: &mut Vec<Asm>, minimize_refs: bool) -> AssembleResult<
     } else {
         set_minimum_ref_size(asm);
 
-        let mut mmap: MarkMap<usize> = MarkMap::new();
+        let mut mmap = MarkMap::new();
         let total_size = build_mark_map(&mut mmap, &asm, 0);
 
         (mmap, total_size)
