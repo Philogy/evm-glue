@@ -81,7 +81,7 @@ fn get_and_validate_marks(asm: &Vec<Asm>, marks: &mut MarkMap<usize>) -> Result<
     Ok(())
 }
 
-type AssembleResult<T> = Result<T, AssembleError>;
+pub type AssembleResult<T> = Result<T, AssembleError>;
 
 fn validate_refs<F>(asm: &Vec<Asm>, validate_mid: &F) -> AssembleResult<()>
 where
