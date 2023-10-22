@@ -44,6 +44,13 @@ pub enum PadSide {
 }
 
 #[derive(Clone, Debug)]
+pub struct MarkRef {
+    pub size: Option<usize>,
+    pub ref_type: RefType,
+    pub ref_repr: RefRepr,
+}
+
+#[derive(Clone, Debug)]
 pub enum Asm {
     Op(Opcode),
     Data(Vec<u8>),
@@ -54,11 +61,7 @@ pub enum Asm {
         blocks: Vec<Asm>,
         side: PadSide,
     },
-    Ref {
-        size: Option<usize>,
-        ref_type: RefType,
-        ref_repr: RefRepr,
-    },
+    Ref(MarkRef),
 }
 
 impl fmt::Display for Asm {
@@ -67,11 +70,11 @@ impl fmt::Display for Asm {
             Data(d) => write!(f, "0x{}", hex::encode(d)),
             Op(i) => write!(f, "{}", i),
             Mark(mid) => write!(f, "#{}:", mid),
-            Ref {
+            Ref(MarkRef {
                 ref_type,
                 ref_repr,
                 size: maybe_size,
-            } => match (ref_repr, maybe_size) {
+            }) => match (ref_repr, maybe_size) {
                 (Literal, Some(size)) => write!(f, "[{}] ({})", size, ref_type),
                 (Pushed, Some(size)) => write!(f, "PUSH{} {}", size, ref_type),
                 (Literal, None) => write!(f, "({})", ref_type),
@@ -84,6 +87,28 @@ impl fmt::Display for Asm {
 
 use Asm::*;
 
+pub fn for_each_mref_mut<F>(asm: &mut Vec<Asm>, f: &mut F)
+where
+    F: FnMut(&mut MarkRef) -> (),
+{
+    asm.iter_mut().for_each(|block| match block {
+        Ref(mref) => f(mref),
+        PaddedBlock { blocks, .. } => for_each_mref_mut(blocks, f),
+        _ => {}
+    })
+}
+
+pub fn for_each_mref<F>(asm: &Vec<Asm>, f: &mut F)
+where
+    F: FnMut(&MarkRef) -> (),
+{
+    asm.iter().for_each(|block| match block {
+        Ref(mref) => f(mref),
+        PaddedBlock { blocks, .. } => for_each_mref(blocks, f),
+        _ => {}
+    })
+}
+
 impl Asm {
     pub fn static_size(&self) -> usize {
         match self {
@@ -91,47 +116,47 @@ impl Asm {
             Data(d) => d.len(),
             Mark(_) => 0,
             PaddedBlock { size, .. } => *size,
-            Ref { ref_repr, .. } => ref_repr.static_size(),
+            Ref(MarkRef { ref_repr, .. }) => ref_repr.static_size(),
         }
     }
 
     pub fn size(&self) -> Option<usize> {
         match self {
-            Ref { ref_repr, size, .. } => size.map(|x| x + ref_repr.static_size()),
+            Ref(MarkRef { ref_repr, size, .. }) => size.map(|x| x + ref_repr.static_size()),
             _ => Some(self.static_size()),
         }
     }
 
     pub fn mref(mid: usize) -> Self {
-        Ref {
+        Ref(MarkRef {
             ref_type: RefType::Direct(mid),
             ref_repr: RefRepr::Pushed,
             size: None,
-        }
+        })
     }
 
     pub fn delta_ref(start_mid: usize, end_mid: usize) -> Self {
-        Ref {
+        Ref(MarkRef {
             ref_type: RefType::Delta(start_mid, end_mid),
             ref_repr: RefRepr::Pushed,
             size: None,
-        }
+        })
     }
 
     pub fn mref_literal(mid: usize) -> Self {
-        Ref {
+        Ref(MarkRef {
             ref_type: RefType::Direct(mid),
             ref_repr: RefRepr::Literal,
             size: None,
-        }
+        })
     }
 
     pub fn delta_ref_literal(start_mid: usize, end_mid: usize) -> Self {
-        Ref {
+        Ref(MarkRef {
             ref_type: RefType::Delta(start_mid, end_mid),
             ref_repr: RefRepr::Literal,
             size: None,
-        }
+        })
     }
 
     pub fn padded_back(size: usize, blocks: Vec<Asm>) -> Self {

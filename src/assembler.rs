@@ -1,5 +1,4 @@
-use crate::assembly::{Asm, PadSide, RefRepr, RefType};
-
+use crate::assembly::{for_each_mref, for_each_mref_mut, Asm, MarkRef, PadSide, RefRepr, RefType};
 
 struct MarkMap<T>(Vec<Option<T>>);
 
@@ -81,7 +80,7 @@ where
 {
     for block in asm {
         match block {
-            Asm::Ref { ref_type, .. } => match ref_type {
+            Asm::Ref(MarkRef { ref_type, .. }) => match ref_type {
                 RefType::Direct(mid) => validate_mid(*mid)?,
                 RefType::Delta(start_mid, end_mid) => {
                     validate_mid(*start_mid)?;
@@ -125,21 +124,9 @@ fn validate_padding(asm: &Vec<Asm>) -> AssembleResult<usize> {
 }
 
 fn get_total_refs(asm: &Vec<Asm>) -> usize {
-    asm.iter()
-        .map(|block| match block {
-            Asm::Ref { .. } => 1,
-            Asm::PaddedBlock { blocks, .. } => get_total_refs(blocks),
-            _ => 0,
-        })
-        .sum()
-}
-
-fn set_size_of_all_refs(asm: &mut Vec<Asm>, new_size: usize) {
-    asm.iter_mut().for_each(|block| match block {
-        Asm::PaddedBlock { blocks, .. } => set_size_of_all_refs(blocks, new_size),
-        Asm::Ref { size, .. } => *size = Some(new_size),
-        _ => {}
-    });
+    let mut total_refs = 0;
+    for_each_mref(asm, &mut |_| total_refs += 1);
+    total_refs
 }
 
 pub fn set_minimum_ref_size(asm: &mut Vec<Asm>) {
@@ -155,7 +142,7 @@ pub fn set_minimum_ref_size(asm: &mut Vec<Asm>) {
         min_ref_size += 1;
     }
 
-    return set_size_of_all_refs(asm, min_ref_size);
+    for_each_mref_mut(asm, &mut |mref| mref.size = Some(min_ref_size));
 }
 
 /// Expects `Asm` to have been validated with `validate_asm` and that the sizes for all refs have
@@ -174,11 +161,11 @@ fn build_mark_map(mmap: &mut MarkMap<usize>, asm: &Vec<Asm>, start_offset: usize
 fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<Asm>) {
     for block in asm {
         match block {
-            Asm::Ref {
+            Asm::Ref(MarkRef {
                 size: maybe_size,
                 ref_type,
                 ref_repr,
-            } => {
+            }) => {
                 let size = maybe_size.expect("Unsized block in asm");
                 let value: usize = match ref_type {
                     RefType::Direct(mid) => mmap.get_direct(*mid),
