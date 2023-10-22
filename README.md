@@ -16,6 +16,9 @@ a certain length.
   - ❌ Reference push/literal size reduction (e.g. reduce `PUSH2 0x0017` => `PUSH1 0x17` for
     references)
 
+**Other TODOs:**
+- [ ] Add tests
+
 ## Quickstart, A full example:
 
 ```rust
