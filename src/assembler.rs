@@ -1,35 +1,5 @@
 use crate::assembly::{Asm, PadSide, RefRepr, RefType};
 
-fn get_last_data(asm: &mut Vec<Asm>) -> Option<&mut Vec<u8>> {
-    match asm.last_mut() {
-        Some(Asm::Data(ref mut d)) => Some(d),
-        _ => None,
-    }
-}
-
-pub fn reduce_asm(asm: &Vec<Asm>) -> Vec<Asm> {
-    let mut reduced_asm = Vec::new();
-    for block in asm {
-        match block {
-            Asm::Op(op) => {
-                let new_bytes: &mut Vec<u8> = match get_last_data(&mut reduced_asm) {
-                    Some(d) => d,
-                    None => {
-                        reduced_asm.push(Asm::Data(Vec::new()));
-                        get_last_data(&mut reduced_asm).unwrap()
-                    }
-                };
-                op.append_to(new_bytes);
-            }
-            Asm::Data(d) => match get_last_data(&mut reduced_asm) {
-                Some(last_d) => last_d.extend(d),
-                None => reduced_asm.push(block.clone()),
-            },
-            _ => reduced_asm.push(block.clone()),
-        }
-    }
-    return reduced_asm;
-}
 
 struct MarkMap<T>(Vec<Option<T>>);
 
@@ -319,14 +289,11 @@ mod tests {
             println!("{}", block);
         }
 
-        let reduced = reduce_asm(&asm);
+        let out = assemble_full(&mut asm).unwrap();
 
-        println!("{:?}", reduced);
+        println!("\n\ncompiled: {}", hex::encode(out));
+    }
 
-        println!();
-        for block in &reduced {
-            println!("{}", block);
-        }
 
         let out = assemble_full(&mut asm).unwrap();
 
