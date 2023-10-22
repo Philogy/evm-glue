@@ -18,7 +18,7 @@ pub fn reduce_asm(asm: &Vec<Asm>) -> Vec<Asm> {
                     let new_bytes: &mut Vec<u8> = match get_last_data(&mut reduced_asm) {
                         Some(d) => d,
                         None => {
-                            reduced_asm.push(Asm::Sized(StaticSizeAsm::Data(Vec::new())));
+                            reduced_asm.push(Asm::data(Vec::new()));
                             get_last_data(&mut reduced_asm).unwrap()
                         }
                     };
@@ -43,23 +43,22 @@ impl<T: Default + Clone> MarkMap<T> {
         Self(Vec::new())
     }
 
-    fn add(&mut self, idx: usize) -> Result<(), &'static str> {
+    fn add(&mut self, idx: usize) -> bool {
         self.set(idx, T::default())
     }
 
-    fn set(&mut self, idx: usize, value: T) -> Result<(), &'static str> {
+    fn set(&mut self, idx: usize, value: T) -> bool {
         let arr: &mut Vec<Option<T>> = &mut self.0;
-        if let Some(Some(_)) = arr.get(idx) {
-            return Err("Cannot set duplicate values in MarkMap");
-        }
 
         if idx >= arr.len() {
             arr.resize(idx, None);
             arr.push(Some(value));
+            true
         } else {
+            let new_set = arr[idx].is_none();
             arr[idx] = Some(value);
+            new_set
         }
-        Ok(())
     }
 
     fn get(&self, idx: usize) -> &Option<T> {
@@ -84,19 +83,24 @@ impl<T: Default + Clone> MarkMap<T> {
     }
 }
 
-type MarkSet = MarkMap<()>;
+#[derive(Debug)]
+pub enum AssembleError {
+    DuplicateMark(usize),
+    InvalidMarkReference(usize),
+    BytecodeExceedsPadding,
+}
 
-fn get_marks(asm: &Vec<Asm>, marks: &mut MarkSet) -> Result<(), String> {
+fn get_and_validate_marks(asm: &Vec<Asm>, marks: &mut MarkMap<usize>) -> Result<(), AssembleError> {
     for block in asm {
         if let Asm::Sized(iblock) = block {
             match iblock {
                 StaticSizeAsm::Mark(mid) => {
-                    marks
-                        .add(*mid)
-                        .map_err(|_| format!("Duplicate mark #{}", mid))?;
+                    if !marks.add(*mid) {
+                        return Err(AssembleError::DuplicateMark(*mid));
+                    }
                 }
                 StaticSizeAsm::PaddedBlock { blocks, .. } => {
-                    get_marks(blocks, marks)?;
+                    get_and_validate_marks(blocks, marks)?;
                 }
                 _ => {}
             }
@@ -120,32 +124,56 @@ impl SizedAsm {
     }
 }
 
-pub fn validate_asm(asm: &Vec<Asm>) -> Result<(), String> {
-    let mut marks = MarkSet::new();
+type AssembleResult<T> = Result<T, AssembleError>;
 
-    get_marks(asm, &mut marks)?;
-
-    let validate_mid = |mid: usize| {
-        if marks.contains(mid) {
-            Ok(())
-        } else {
-            Err(format!("Non existent mark #{}", mid))
-        }
-    };
-
+fn validate_refs<F>(asm: &Vec<Asm>, validate_mid: &F) -> AssembleResult<()>
+where
+    F: Fn(usize) -> AssembleResult<()>,
+{
     for block in asm {
-        if let Asm::Unsized(FullMarkRef { mref, .. }) = block {
-            match mref {
+        match block {
+            Asm::Unsized(FullMarkRef { mref, .. }) => match mref {
                 MRef::Direct(mid) => validate_mid(*mid)?,
                 MRef::Delta(start_mid, end_mid) => {
                     validate_mid(*start_mid)?;
                     validate_mid(*end_mid)?;
                 }
+            },
+            Asm::Sized(StaticSizeAsm::PaddedBlock { blocks, .. }) => {
+                validate_refs(&blocks, validate_mid)?
             }
+            _ => {}
         }
     }
 
     Ok(())
+}
+
+pub fn validate_asm(asm: &Vec<Asm>) -> AssembleResult<()> {
+    let mut marks: MarkMap<usize> = MarkMap::new();
+
+    get_and_validate_marks(asm, &mut marks)?;
+
+    validate_refs(asm, &|mid: usize| {
+        if marks.contains(mid) {
+            Ok(())
+        } else {
+            Err(AssembleError::InvalidMarkReference(mid))
+        }
+    })
+}
+
+fn validate_padding(asm: &Vec<SizedAsm>) -> AssembleResult<usize> {
+    asm.iter().fold(Ok(0), |maybe_offset, block| {
+        let offset = maybe_offset?;
+        if let SizedAsm::FixedSize(StaticSizeAsm::PaddedBlock { size, blocks, .. }) = block {
+            let full_size = validate_padding(blocks)?;
+            if full_size > *size {
+                return Err(AssembleError::BytecodeExceedsPadding);
+            }
+        }
+        Ok(offset + block.size())
+    })
 }
 
 fn get_total_refs(asm: &Vec<Asm>) -> usize {
@@ -202,32 +230,17 @@ pub fn size_asm(asm: &Vec<Asm>) -> Vec<SizedAsm> {
     return set_asm_size(asm, min_ref_size);
 }
 
-#[derive(Debug)]
-pub enum AssembleError {
-    DuplicateMark(usize),
-    BytecodeExceedsPadding,
-}
-
-fn build_mark_map(
-    mmap: &mut MarkMap<usize>,
-    asm: &Vec<SizedAsm>,
-    start_offset: usize,
-) -> Result<usize, AssembleError> {
-    asm.iter().fold(Ok(start_offset), |maybe_offset, block| {
-        let offset = maybe_offset?;
+/// Expects `asm` to have been validated with
+fn build_mark_map(mmap: &mut MarkMap<usize>, asm: &Vec<SizedAsm>, start_offset: usize) -> usize {
+    asm.iter().fold(start_offset, |offset, block| {
         if let SizedAsm::FixedSize(ss_asm) = block {
             if let StaticSizeAsm::Mark(mid) = ss_asm {
-                mmap.set(*mid, offset)
-                    .map_err(|_| AssembleError::DuplicateMark(*mid))?;
-            } else if let StaticSizeAsm::PaddedBlock { size, blocks, .. } = ss_asm {
-                let end_offset = build_mark_map(mmap, blocks, offset)?;
-                // `build_mark_map` is block-type agnostic, validating padding here.
-                if end_offset - start_offset > *size {
-                    return Err(AssembleError::BytecodeExceedsPadding);
-                }
+                mmap.set(*mid, offset);
+            } else if let StaticSizeAsm::PaddedBlock { blocks, .. } = ss_asm {
+                build_mark_map(mmap, blocks, offset);
             }
         }
-        Ok(offset + block.size())
+        offset + block.size()
     })
 }
 
@@ -259,6 +272,7 @@ fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<SizedAsm>) 
             SizedAsm::FixedSize(ss_asm) => match ss_asm {
                 StaticSizeAsm::Op(op) => op.append_to(bytecode),
                 StaticSizeAsm::Data(data) => bytecode.extend(data),
+                StaticSizeAsm::Mark(_) => {}
                 StaticSizeAsm::PaddedBlock {
                     size,
                     padding,
@@ -280,7 +294,6 @@ fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<SizedAsm>) 
                         }
                     }
                 }
-                StaticSizeAsm::Mark(_) => {}
             },
         }
     }
@@ -290,7 +303,7 @@ fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap<usize>, asm: &Vec<SizedAsm>) 
 fn assemble_sized(asm: &Vec<SizedAsm>) -> Result<Vec<u8>, AssembleError> {
     let mut mmap: MarkMap<usize> = MarkMap::new();
     // PaddedBlock size validation already done in `build_mark_map`.
-    let end_offset = build_mark_map(&mut mmap, asm, 0)?;
+    let end_offset = build_mark_map(&mut mmap, asm, 0);
     let mut bytecode: Vec<u8> = Vec::with_capacity(end_offset);
 
     assemble(&mut bytecode, &mmap, asm);
@@ -299,7 +312,12 @@ fn assemble_sized(asm: &Vec<SizedAsm>) -> Result<Vec<u8>, AssembleError> {
 }
 
 pub fn assemble_full(asm: &Vec<Asm>) -> Result<Vec<u8>, AssembleError> {
+    validate_asm(asm)?;
+
     let sized = size_asm(&asm);
+
+    validate_padding(&sized)?;
+
     // TODO: Add reference push size reducer e.g. PUSH #2 => PUSH2 0x0027 => PUSH1 0x27
     assemble_sized(&sized)
 }
