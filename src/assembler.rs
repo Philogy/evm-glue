@@ -104,6 +104,8 @@ fn get_and_validate_marks(asm: &Vec<Asm>, marks: &mut MarkMap<usize>) -> Result<
     Ok(())
 }
 
+/// Members duplicated from `Asm` in favor of having a more shallow type, which avoids nested match
+/// statements in functions.
 #[derive(Debug)]
 pub enum SizedAsm {
     Op(Opcode),

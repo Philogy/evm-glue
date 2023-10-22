@@ -43,8 +43,6 @@ pub enum PadSide {
     Back,
 }
 
-// Uglily nested so that `StaticSizeAsm` can be reused later, wanted to avoid having to redefine
-// what are essentially the same 4 enum variants two times.
 #[derive(Clone, Debug)]
 pub enum Asm {
     Op(Opcode),
