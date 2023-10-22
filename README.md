@@ -63,7 +63,7 @@ fn main() {
         Op(REVERT),
     ];
 
-    let runtime_bytecode = assemble_full(&runtime).unwrap();
+    let runtime_bytecode = assemble_full(&runtime, true).unwrap();
 
     let mut deploy_marks = MarkTracker::new();
     let runtime_start = deploy_marks.next();
@@ -86,7 +86,7 @@ fn main() {
         Asm::padded_back(32, vec![data!("49203c3320796f75203a29")]),
     ];
 
-    let deploy_bytecode = assemble_full(&deploy).unwrap();
+    let deploy_bytecode = assemble_full(&deploy, true).unwrap();
 
     println!("runtime bytecode: {}", hex::encode(runtime_bytecode));
     println!("deploy bytecode: {}", hex::encode(deploy_bytecode));
@@ -96,8 +96,22 @@ fn main() {
 ## API
 
 The overarching API is that you create a list of assembly blocks (`Vec<Asm>`) and feed it into
-`assembler::full_assemble` that then turns it into one long string of bytecode. Blocks and their 
+`assembler::assemble_full` that then turns it into one long string of bytecode. Blocks and their 
 types are found under `evm_glue::assembly`.
+
+### Executing the assembler (`assembler::assemble_full`)
+
+The `assemble_full` is the main entry point for assembling a string of assembly blocks, it takes two
+arguments:
+- `asm: &mut Vec<Asm>`: This is the array containing all the assembly
+- `minimize_refs: bool`: A boolean flag indicating whether you want the enable the reference
+  size minimization step. If set to `false` all references will use the same amount of bytes.
+
+
+> [!IMPORTANT]
+> Note that the passed `asm` object will be modified in-place, with the assemble step setting
+> concrete sizes for all the references. Be sure to `.clone()` your `asm` object before passing it
+> in if you wish to retain it in its original, size unset form.
 
 ### Op
 
