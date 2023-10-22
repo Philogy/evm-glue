@@ -163,7 +163,7 @@ fn build_mark_map(mmap: &mut MarkMap<usize>, asm: &Vec<Asm>, start_offset: usize
         } else if let Asm::PaddedBlock { blocks, .. } = block {
             build_mark_map(mmap, blocks, offset);
         }
-        offset + block.size().expect("Unsized block in asm")
+        offset + block.size().unwrap_or(0)
     })
 }
 
@@ -235,9 +235,12 @@ fn minimize_ref_sizes(asm: &mut Vec<Asm>) -> (MarkMap<usize>, usize) {
         total_size = build_mark_map(&mut mmap, &asm, 0);
         for_each_mref_mut(asm, &mut |mref| {
             let required_size = min_ref_size(mmap.lookup_value(&mref.ref_type));
-            if mref.size.expect("Unsized block") != required_size {
-                mref.size = Some(required_size);
-                remaining_changes = true;
+            match mref.size {
+                Some(inner_size) if inner_size == required_size => {}
+                _ => {
+                    mref.size = Some(required_size);
+                    remaining_changes = true;
+                }
             }
         });
     }
@@ -248,18 +251,18 @@ fn minimize_ref_sizes(asm: &mut Vec<Asm>) -> (MarkMap<usize>, usize) {
 pub fn assemble_full(asm: &mut Vec<Asm>, minimize_refs: bool) -> AssembleResult<Vec<u8>> {
     validate_asm(&asm)?;
 
-    set_minimum_ref_size(asm);
-
-    validate_padding(&asm)?;
-
     let (mmap, total_size) = if minimize_refs {
         minimize_ref_sizes(asm)
     } else {
+        set_minimum_ref_size(asm);
+
         let mut mmap: MarkMap<usize> = MarkMap::new();
         let total_size = build_mark_map(&mut mmap, &asm, 0);
 
         (mmap, total_size)
     };
+
+    validate_padding(&asm)?;
 
     let mut bytecode = Vec::with_capacity(total_size);
 
@@ -282,7 +285,7 @@ mod tests {
 
     #[test]
     fn test_reduce() {
-        let mut asm = vec![
+        let asm = vec![
             Asm::delta_ref(0, 1),
             Op(DUP1),
             Asm::mref(0),
@@ -308,23 +311,25 @@ mod tests {
             println!("{}", block);
         }
 
-        let out = assemble_full(&mut asm, true).unwrap();
+        let out = assemble_full(&mut asm.clone(), true).unwrap();
 
-        println!("\n\ncompiled: {}", hex::encode(out));
+        println!("\n\ncompiled: {}", hex::encode(&out));
+
+        assert_eq!(out, assemble_full(&mut asm.clone(), false).unwrap());
     }
 
     #[test]
     fn test_adjusting_offset() {
-        let mut asm = vec![
+        let asm = vec![
             Mark(0),
             Op(JUMPDEST),
-            Asm::padded_back(256, vec![]),
+            Data(vec![0; 256]),
             Asm::mref(0),
             Mark(1),
             Asm::mref(1),
         ];
 
-        let out = assemble_full(&mut asm, true).unwrap();
-        assert_eq!(out, hx!("5b000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006000610103"));
+        assert_eq!(assemble_full(&mut asm.clone(), true).unwrap(), hx!("5b000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006000610103"));
+        assert_eq!(assemble_full(&mut asm.clone(), false).unwrap(), hx!("5b00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000610000610104"));
     }
 }
