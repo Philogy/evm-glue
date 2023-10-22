@@ -125,7 +125,7 @@ use evm_glue::opcodes::Opcode::*;
 use hex_literal::hex;
 
 let asm = vec![
-    Op(PUSH1(hx!("20"))),
+    Op(PUSH1(hex!("20"))),
     Op(CALLDATALOAD),
     Op(DUP2),
     Op(PUSH5(hex!("0000138302"))),
