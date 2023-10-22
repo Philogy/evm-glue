@@ -101,8 +101,8 @@ types are found under `evm_glue::assembly`.
 
 ### Assembling (`assembler::assemble_full`)
 
-The `assemble_full` is the main entry point for assembling a string of assembly blocks, it takes two
-arguments:
+The `assemble_full` function is the main entry point for assembling a string of assembly blocks.
+It takes two arguments:
 - `asm: &mut Vec<Asm>`: This is the array containing all the assembly
 - `minimize_refs: bool`: A boolean flag indicating whether you want the enable the reference
   size minimization step. If set to `false` all references will use the same amount of bytes.
