@@ -267,7 +267,7 @@ macro_rules! evm_asm {
 /// let runtime_macro = evm_asm!(
 ///     // Load x, y
 ///     VAR push0_var,
-///     CALLDATALOAD,
+///     CALLDATALOAD,            // x
 ///     PUSH1(hex!("20")),
 ///     CALLDATALOAD,            // x, y
 ///     // Add and check for overflow
@@ -300,8 +300,8 @@ macro_rules! evm_asm_vec {
         $res.push(Asm::Mark($expr));
         evm_asm_vec!($res; $($($rest)*)?);
     };
-    ($res:ident; Data($expr:expr) $(, $($rest:tt)*)?) => {
-        $res.push(data!($expr));
+    ($res:ident; Data($lit:literal) $(, $($rest:tt)*)?) => {
+        $res.push(data!($lit));
         evm_asm_vec!($res; $($($rest)*)?);
     };
     ($res:ident; PaddedBlock { $a:expr, $b:expr, $c:expr, $d: expr } $(, $($rest:tt)*)?) => {
