@@ -87,9 +87,9 @@ impl fmt::Display for Asm {
 
 use Asm::*;
 
-pub fn for_each_mref_mut<F>(asm: &mut Vec<Asm>, f: &mut F)
+pub fn for_each_mref_mut<F>(asm: &mut [Asm], f: &mut F)
 where
-    F: FnMut(&mut MarkRef) -> (),
+    F: FnMut(&mut MarkRef),
 {
     asm.iter_mut().for_each(|block| match block {
         Ref(mref) => f(mref),
@@ -98,11 +98,12 @@ where
     })
 }
 
-pub fn for_each_mref<F>(asm: &Vec<Asm>, f: &mut F)
+pub fn for_each_mref<A, F>(asm: A, f: &mut F)
 where
-    F: FnMut(&MarkRef) -> (),
+    A: AsRef<[Asm]>,
+    F: FnMut(&MarkRef),
 {
-    asm.iter().for_each(|block| match block {
+    asm.as_ref().iter().for_each(|block| match block {
         Ref(mref) => f(mref),
         PaddedBlock { blocks, .. } => for_each_mref(blocks, f),
         _ => {}
@@ -233,8 +234,8 @@ macro_rules! evm_asm {
 /// use evm_glue::{assembly::{*, Asm::*}, opcodes::{*, Opcode::*}, utils::*, evm_asm, evm_asm_vec};
 /// use hex_literal::hex;
 ///
-/// let mut runtime_marks = MarkTracker::new();
-/// let empty_revert = runtime_marks.next();
+/// let mut runtime_marks = MarkTracker::default();
+/// let empty_revert = runtime_marks.next_mark();
 ///
 /// let push0_var = Asm::Op(PUSH0);
 /// let runtime = vec![

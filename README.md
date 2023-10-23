@@ -31,9 +31,8 @@ use hex_literal::hex as hx;
 use Asm::*;
 
 fn main() {
-    let mut runtime_marks = MarkTracker::new();
-
-    let empty_revert = runtime_marks.next();
+    let mut runtime_marks = MarkTracker::default();
+    let empty_revert = runtime_marks.next_mark();
 
     let mut runtime = vec![
         // Load x, y
@@ -65,9 +64,9 @@ fn main() {
 
     let runtime_bytecode = assemble_full(&mut runtime, true).unwrap();
 
-    let mut deploy_marks = MarkTracker::new();
-    let runtime_start = deploy_marks.next();
-    let runtime_end = deploy_marks.next();
+    let mut deploy_marks = MarkTracker::default();
+    let runtime_start = deploy_marks.next_mark();
+    let runtime_end = deploy_marks.next_mark();
 
     let mut deploy = vec![
         // Constructor
@@ -163,10 +162,10 @@ worrying about duplicates:
 use evm_glue::utils::MarkTracker;
 use evm_glue::assembly::Asm::*;
 
-let mut mt = MarkTracker::new();
+let mut mt = MarkTracker::default();
 
-let label1 = mt.next();       // 0
-let empty_revert = mt.next(); // 1
+let label1 = mt.next_mark();       // 0
+let empty_revert = mt.next_mark(); // 1
 
 let asm = vec![
     Mark(label1),
@@ -200,9 +199,9 @@ These also have helpers:
 ```rust
 use evm_glue::{assembly::Asm, utils::MarkTracker};
 
-let mut deploy_marks = MarkTracker::new();
-let runtime_start = deploy_marks.next();
-let runtime_end = deploy_marks.next();
+let mut deploy_marks = MarkTracker::default();
+let runtime_start = deploy_marks.next_mark();
+let runtime_end = deploy_marks.next_mark();
 let asm = vec![
     Asm::delta_ref(runtime_start, runtime_end), // Pushed delta reference
     // ...,
