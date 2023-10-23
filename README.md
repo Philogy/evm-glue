@@ -35,7 +35,7 @@ fn main() {
 
     let empty_revert = runtime_marks.next();
 
-    let runtime = vec![
+    let mut runtime = vec![
         // Load x, y
         Op(PUSH0),
         Op(CALLDATALOAD), // x
@@ -63,13 +63,13 @@ fn main() {
         Op(REVERT),
     ];
 
-    let runtime_bytecode = assemble_full(&runtime, true).unwrap();
+    let runtime_bytecode = assemble_full(&mut runtime, true).unwrap();
 
     let mut deploy_marks = MarkTracker::new();
     let runtime_start = deploy_marks.next();
     let runtime_end = deploy_marks.next();
 
-    let deploy = vec![
+    let mut deploy = vec![
         // Constructor
         Asm::delta_ref(runtime_start, runtime_end), // rt_size
         Op(DUP1),                                   // rt_size, rt_size
@@ -86,7 +86,7 @@ fn main() {
         Asm::padded_back(32, vec![data!("49203c3320796f75203a29")]),
     ];
 
-    let deploy_bytecode = assemble_full(&deploy, true).unwrap();
+    let deploy_bytecode = assemble_full(&mut deploy, true).unwrap();
 
     println!("runtime bytecode: {}", hex::encode(runtime_bytecode));
     println!("deploy bytecode: {}", hex::encode(deploy_bytecode));
@@ -129,7 +129,7 @@ let asm = vec![
     Op(CALLDATALOAD),
     Op(DUP2),
     Op(PUSH5(hex!("0000138302"))),
-]
+];
 ```
 
 ### Marks & References
@@ -198,14 +198,17 @@ tables.
 These also have helpers:
 
 ```rust
-use evm_glue::assembly::Asm;
+use evm_glue::{assembly::Asm, utils::MarkTracker};
 
+let mut deploy_marks = MarkTracker::new();
+let runtime_start = deploy_marks.next();
+let runtime_end = deploy_marks.next();
 let asm = vec![
     Asm::delta_ref(runtime_start, runtime_end), // Pushed delta reference
     // ...,
     Asm::mref(runtime_start),                   // Pushed direct reference
     // ...,
-    Asm::mark(runtime_start),
+    Asm::Mark(runtime_start),
 ];
 ```
 
@@ -221,7 +224,7 @@ To insert a byte stream (`Vec<u8>`) as data you can use the `Asm::Data` enum mem
 ```rust
 use evm_glue::assembly::Asm::*;
 
-let runtime_bytecode: Vec<u8> = /* some bytecode */;
+let runtime_bytecode: Vec<u8> = vec![0x00];
 
 let asm = vec![
     Data(runtime_bytecode.clone())
@@ -233,7 +236,7 @@ let asm = vec![
 You can use the `evm_glue::data` macro to directly specify a hex literal as data:
 
 ```rust
-use evm_glue::data;
+use evm_glue::{data, assembly::Asm};
 
 let asm = vec![
     data!("0283")
