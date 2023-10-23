@@ -367,6 +367,10 @@ impl Opcode {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
     pub fn append_to(&self, stream: &mut Vec<u8>) {
         stream.push(self.byte());
 

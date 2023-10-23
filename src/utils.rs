@@ -8,14 +8,11 @@ macro_rules! debug_as_display {
     };
 }
 
+#[derive(Default)]
 pub struct MarkTracker(usize);
 
 impl MarkTracker {
-    pub fn new() -> Self {
-        MarkTracker(0)
-    }
-
-    pub fn next(&mut self) -> usize {
+    pub fn next_mark(&mut self) -> usize {
         let new_mid = self.0;
         self.0 = new_mid + 1;
         new_mid
