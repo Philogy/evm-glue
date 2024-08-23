@@ -1,4 +1,4 @@
-# 🫠 EVM Glue 
+# 🫠 EVM Glue
 
 EVM Glue ("Glue") is an EVM assembler written in Rust. Glue gives you a simple API that allows 
 you to insert opcodes, raw bytes, or so-called "references" (e.g. jump destinations) and assembles 
