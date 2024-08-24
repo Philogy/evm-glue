@@ -1,13 +1,3 @@
-macro_rules! debug_as_display {
-    ($obj:tt) => {
-        impl fmt::Display for $obj {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                write!(f, "{:?}", self)
-            }
-        }
-    };
-}
-
 #[derive(Debug, Default)]
 pub struct MarkTracker(usize);
 
@@ -18,5 +8,3 @@ impl MarkTracker {
         new_mid
     }
 }
-
-pub(crate) use debug_as_display;
