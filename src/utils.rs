@@ -8,7 +8,7 @@ macro_rules! debug_as_display {
     };
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct MarkTracker(usize);
 
 impl MarkTracker {
