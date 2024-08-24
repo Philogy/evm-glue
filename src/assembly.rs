@@ -1,26 +1,6 @@
 use crate::opcodes::Opcode;
-use crate::utils::debug_as_display;
 use hex;
 use std::fmt;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RefRepr {
-    Pushed,
-    Literal,
-}
-
-use RefRepr::*;
-
-debug_as_display!(RefRepr);
-
-impl RefRepr {
-    pub fn static_size(&self) -> usize {
-        match self {
-            Pushed => 1,
-            Literal => 0,
-        }
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RefType {
@@ -47,7 +27,17 @@ pub enum PadSide {
 pub struct MarkRef {
     pub size: Option<usize>,
     pub ref_type: RefType,
-    pub ref_repr: RefRepr,
+    pub is_pushed: bool,
+}
+
+impl MarkRef {
+    fn static_size(&self) -> usize {
+        if self.is_pushed {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,13 +62,13 @@ impl fmt::Display for Asm {
             Mark(mid) => write!(f, "#{}:", mid),
             Ref(MarkRef {
                 ref_type,
-                ref_repr,
+                is_pushed,
                 size: maybe_size,
-            }) => match (ref_repr, maybe_size) {
-                (Literal, Some(size)) => write!(f, "[{}] ({})", size, ref_type),
-                (Pushed, Some(size)) => write!(f, "PUSH{} {}", size, ref_type),
-                (Literal, None) => write!(f, "({})", ref_type),
-                (Pushed, None) => write!(f, "PUSH {}", ref_type),
+            }) => match (is_pushed, maybe_size) {
+                (false, Some(size)) => write!(f, "[{}] ({})", size, ref_type),
+                (true, Some(size)) => write!(f, "PUSH{} {}", size, ref_type),
+                (false, None) => write!(f, "({})", ref_type),
+                (true, None) => write!(f, "PUSH {}", ref_type),
             },
             _ => write!(f, "{:?}", self),
         }
@@ -117,13 +107,13 @@ impl Asm {
             Data(d) => d.len(),
             Mark(_) => 0,
             PaddedBlock { size, .. } => *size,
-            Ref(MarkRef { ref_repr, .. }) => ref_repr.static_size(),
+            Ref(mref) => mref.static_size(),
         }
     }
 
     pub fn size(&self) -> Option<usize> {
         match self {
-            Ref(MarkRef { ref_repr, size, .. }) => size.map(|x| x + ref_repr.static_size()),
+            Ref(mref @ MarkRef { size, .. }) => size.map(|x| x + mref.static_size()),
             _ => Some(self.static_size()),
         }
     }
@@ -131,7 +121,7 @@ impl Asm {
     pub fn mref(mid: usize) -> Self {
         Ref(MarkRef {
             ref_type: RefType::Direct(mid),
-            ref_repr: RefRepr::Pushed,
+            is_pushed: true,
             size: None,
         })
     }
@@ -139,7 +129,7 @@ impl Asm {
     pub fn delta_ref(start_mid: usize, end_mid: usize) -> Self {
         Ref(MarkRef {
             ref_type: RefType::Delta(start_mid, end_mid),
-            ref_repr: RefRepr::Pushed,
+            is_pushed: true,
             size: None,
         })
     }
@@ -147,7 +137,7 @@ impl Asm {
     pub fn mref_literal(mid: usize) -> Self {
         Ref(MarkRef {
             ref_type: RefType::Direct(mid),
-            ref_repr: RefRepr::Literal,
+            is_pushed: false,
             size: None,
         })
     }
@@ -155,7 +145,7 @@ impl Asm {
     pub fn delta_ref_literal(start_mid: usize, end_mid: usize) -> Self {
         Ref(MarkRef {
             ref_type: RefType::Delta(start_mid, end_mid),
-            ref_repr: RefRepr::Literal,
+            is_pushed: false,
             size: None,
         })
     }

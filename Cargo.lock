@@ -3,7 +3,7 @@
 version = 3
 
 [[package]]
-name = "evm_glue"
+name = "evm-glue"
 version = "0.1.0"
 dependencies = [
  "hex",

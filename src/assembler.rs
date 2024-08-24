@@ -1,4 +1,4 @@
-use crate::assembly::{for_each_mref, for_each_mref_mut, Asm, MarkRef, PadSide, RefRepr, RefType};
+use crate::assembly::{for_each_mref, for_each_mref_mut, Asm, MarkRef, PadSide, RefType};
 
 struct MarkMap(Vec<Option<usize>>);
 
@@ -162,11 +162,11 @@ fn assemble(bytecode: &mut Vec<u8>, mmap: &MarkMap, asm: &Vec<Asm>) {
             Asm::Ref(MarkRef {
                 size: maybe_size,
                 ref_type,
-                ref_repr,
+                is_pushed,
             }) => {
                 let size = maybe_size.expect("Unsized block in asm");
                 let value: usize = mmap.lookup_value(ref_type);
-                if let RefRepr::Pushed = ref_repr {
+                if *is_pushed {
                     bytecode.push((0x60 + size - 1).try_into().unwrap());
                 }
                 // TODO: Make value => bytes + padding more elegant.
