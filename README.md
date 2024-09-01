@@ -245,7 +245,7 @@ let asm = vec![
 ### Padded Blocks
 
 These are bytecode sections that you want to have a certain length, this can be the case if you're
-generating a jump table. Padded blocks bad their sections with a specific byte, by default the
+generating a jump table. Padded blocks pad their sections with a specific byte, by default the
 0-byte `0x00`. They can pad to the front or to the back.
  
 To create padded blocks the following helpers are available:
