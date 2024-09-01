@@ -44,6 +44,7 @@ impl MarkMap {
                 panic!("Reference to nonexistent mark {} at index {}", id, index)
             };
 
+            #[cfg(not(feature = "sanity-checks"))]
             Default::default()
         })
     }
@@ -174,8 +175,7 @@ pub fn assemble_minimized(asm: &[Asm]) -> Vec<u8> {
 }
 
 fn value_to_ref_extra_bytes(value: usize) -> u8 {
-    let out = value.checked_ilog2().unwrap_or_default() as u8 / 8 + 1;
-    out
+    value.checked_ilog2().unwrap_or_default() as u8 / 8 + 1
 }
 
 #[cfg(test)]

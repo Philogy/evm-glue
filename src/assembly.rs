@@ -57,7 +57,6 @@ impl fmt::Display for Asm {
                     write!(f, "({})", ref_type)
                 }
             }
-            _ => write!(f, "{:?}", self),
         }
     }
 }
