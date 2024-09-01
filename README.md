@@ -2,16 +2,13 @@
 
 EVM Glue ("Glue") is an EVM assembler written in Rust. Glue gives you a simple API that allows 
 you to insert opcodes, raw bytes, or so-called "references" (e.g. jump destinations) and assembles 
-it into EVM bytecode. Glue also supports padded blocks, bytecode sections that will be padded up to
-a certain length.
+it into EVM bytecode. 
 
 ## Features
 - ✅ Base Assembly Building Blocks
   - ✅ Opcodes
   - ✅ Raw Bytecode
   - ✅ Marks & References (e.g. for jump destinations, code sections)
-- ✅ Extra Building Blocks
-  - ✅ Padded Blocks
 - ✅ Assembly Optimizations
   - ✅ Reference push/literal size reduction (e.g. reduce `PUSH2 0x0017` => `PUSH1 0x17` for
     references)
@@ -22,7 +19,7 @@ a certain length.
 ## Quickstart, A full example:
 
 ```rust
-use evm_glue::assembler::assemble_full;
+use evm_glue::assembler::assemble_maximized;
 use evm_glue::assembly::Asm;
 use evm_glue::data;
 use evm_glue::opcodes::Opcode::*;
@@ -62,7 +59,7 @@ fn main() {
         Op(REVERT),
     ];
 
-    let runtime_bytecode = assemble_full(&mut runtime, true).unwrap();
+    let runtime_bytecode = assemble_maximized(&runtime);
 
     let mut deploy_marks = MarkTracker::default();
     let runtime_start = deploy_marks.next_mark();
@@ -81,11 +78,9 @@ fn main() {
         Mark(runtime_start),
         Data(runtime_bytecode.clone()),
         Mark(runtime_end),
-        // Random metadata padded to 32-bytes, will not be included in returned runtime bytecode.
-        Asm::padded_back(32, vec![data!("49203c3320796f75203a29")]),
     ];
 
-    let deploy_bytecode = assemble_full(&mut deploy, true).unwrap();
+    let deploy_bytecode = assemble_maximized(&deploy);
 
     println!("runtime bytecode: {}", hex::encode(runtime_bytecode));
     println!("deploy bytecode: {}", hex::encode(deploy_bytecode));
@@ -241,16 +236,3 @@ let asm = vec![
     data!("0283")
 ];
 ```
-
-### Padded Blocks
-
-These are bytecode sections that you want to have a certain length, this can be the case if you're
-generating a jump table. Padded blocks pad their sections with a specific byte, by default the
-0-byte `0x00`. They can pad to the front or to the back.
- 
-To create padded blocks the following helpers are available:
-
-- `Asm::padded_back(size: usize, blocks: Vec<Asm>) -> Asm`
-- `Asm::padded_front(size: usize, blocks: Vec<Asm>) -> Asm`
-- `Asm::padded_back_with(size: usize, padding: u8, blocks: Vec<Asm>) -> Asm`
-- `Asm::padded_front_with(size: usize, padding: u8, blocks: Vec<Asm>) -> Asm`

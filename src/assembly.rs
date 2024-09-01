@@ -18,20 +18,13 @@ impl fmt::Display for RefType {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PadSide {
-    Front,
-    Back,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MarkRef {
-    pub size: Option<usize>,
     pub ref_type: RefType,
     pub is_pushed: bool,
 }
 
 impl MarkRef {
-    fn static_size(&self) -> usize {
+    fn min_size(&self) -> usize {
         if self.is_pushed {
             1
         } else {
@@ -45,145 +38,66 @@ pub enum Asm {
     Op(Opcode),
     Data(Vec<u8>),
     Mark(usize),
-    PaddedBlock {
-        size: usize,
-        padding: u8,
-        blocks: Vec<Asm>,
-        side: PadSide,
-    },
     Ref(MarkRef),
 }
 
 impl fmt::Display for Asm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Data(d) => write!(f, "0x{}", hex::encode(d)),
-            Op(i) => write!(f, "{}", i),
-            Mark(mid) => write!(f, "#{}:", mid),
-            Ref(MarkRef {
+            Self::Data(d) => write!(f, "0x{}", hex::encode(d)),
+            Self::Op(i) => write!(f, "{}", i),
+            Self::Mark(mid) => write!(f, "#{}:", mid),
+            Self::Ref(MarkRef {
                 ref_type,
                 is_pushed,
-                size: maybe_size,
-            }) => match (is_pushed, maybe_size) {
-                (false, Some(size)) => write!(f, "[{}] ({})", size, ref_type),
-                (true, Some(size)) => write!(f, "PUSH{} {}", size, ref_type),
-                (false, None) => write!(f, "({})", ref_type),
-                (true, None) => write!(f, "PUSH {}", ref_type),
-            },
+            }) => {
+                if *is_pushed {
+                    write!(f, "PUSH {}", ref_type)
+                } else {
+                    write!(f, "({})", ref_type)
+                }
+            }
             _ => write!(f, "{:?}", self),
         }
     }
 }
 
-use Asm::*;
-
-pub fn for_each_mref_mut<F>(asm: &mut [Asm], f: &mut F)
-where
-    F: FnMut(&mut MarkRef),
-{
-    asm.iter_mut().for_each(|block| match block {
-        Ref(mref) => f(mref),
-        PaddedBlock { blocks, .. } => for_each_mref_mut(blocks, f),
-        _ => {}
-    })
-}
-
-pub fn for_each_mref<A, F>(asm: A, f: &mut F)
-where
-    A: AsRef<[Asm]>,
-    F: FnMut(&MarkRef),
-{
-    asm.as_ref().iter().for_each(|block| match block {
-        Ref(mref) => f(mref),
-        PaddedBlock { blocks, .. } => for_each_mref(blocks, f),
-        _ => {}
-    })
-}
-
 impl Asm {
-    pub fn static_size(&self) -> usize {
+    pub fn size(&self) -> usize {
         match self {
-            Op(i) => i.len(),
-            Data(d) => d.len(),
-            Mark(_) => 0,
-            PaddedBlock { size, .. } => *size,
-            Ref(mref) => mref.static_size(),
-        }
-    }
-
-    pub fn size(&self) -> Option<usize> {
-        match self {
-            Ref(mref @ MarkRef { size, .. }) => size.map(|x| x + mref.static_size()),
-            _ => Some(self.static_size()),
+            Self::Op(i) => i.len(),
+            Self::Data(d) => d.len(),
+            Self::Mark(_) => 0,
+            Self::Ref(mref) => mref.min_size(),
         }
     }
 
     pub fn mref(mid: usize) -> Self {
-        Ref(MarkRef {
+        Self::Ref(MarkRef {
             ref_type: RefType::Direct(mid),
             is_pushed: true,
-            size: None,
         })
     }
 
     pub fn delta_ref(start_mid: usize, end_mid: usize) -> Self {
-        Ref(MarkRef {
+        Self::Ref(MarkRef {
             ref_type: RefType::Delta(start_mid, end_mid),
             is_pushed: true,
-            size: None,
         })
     }
 
     pub fn mref_literal(mid: usize) -> Self {
-        Ref(MarkRef {
+        Self::Ref(MarkRef {
             ref_type: RefType::Direct(mid),
             is_pushed: false,
-            size: None,
         })
     }
 
     pub fn delta_ref_literal(start_mid: usize, end_mid: usize) -> Self {
-        Ref(MarkRef {
+        Self::Ref(MarkRef {
             ref_type: RefType::Delta(start_mid, end_mid),
             is_pushed: false,
-            size: None,
         })
-    }
-
-    pub fn padded_back(size: usize, blocks: Vec<Asm>) -> Self {
-        PaddedBlock {
-            size,
-            padding: 0x00,
-            blocks,
-            side: PadSide::Back,
-        }
-    }
-
-    pub fn padded_front(size: usize, blocks: Vec<Asm>) -> Self {
-        PaddedBlock {
-            size,
-            padding: 0x00,
-            blocks,
-            side: PadSide::Front,
-        }
-    }
-
-    pub fn padded_back_with(size: usize, padding: u8, blocks: Vec<Asm>) -> Self {
-        PaddedBlock {
-            size,
-            padding,
-            blocks,
-            side: PadSide::Back,
-        }
-    }
-
-    pub fn padded_front_with(size: usize, padding: u8, blocks: Vec<Asm>) -> Self {
-        PaddedBlock {
-            size,
-            padding,
-            blocks,
-            side: PadSide::Front,
-        }
     }
 }
 
@@ -212,7 +126,6 @@ macro_rules! evm_asm {
 /// - Shorthands for all [Asm] variants are supported directly. In order of precedence:
 ///     - `Mark($expr)` -> `Asm::Mark($expr)`
 ///     - `Data($expr)` -> `Asm::Data($expr)`
-///     - `PaddedBlock { $a:expr, $b:expr, $c:expr, $d: expr }` -> `Asm::PaddedBlock { size: $a, padding: $b, blocks: $c, side: $d }`
 ///     - `Ref($expr)` -> `Asm::Ref($expr)`
 ///     - `Op($expr)` -> `Asm::Op($expr)`
 ///     - `Asm::$variant($($expr:expr),*)` -> `Asm::$variant($($expr),*)`
@@ -293,10 +206,6 @@ macro_rules! evm_asm_vec {
     };
     ($res:ident; Data($lit:literal) $(, $($rest:tt)*)?) => {
         $res.push(data!($lit));
-        evm_asm_vec!($res; $($($rest)*)?);
-    };
-    ($res:ident; PaddedBlock { $a:expr, $b:expr, $c:expr, $d: expr } $(, $($rest:tt)*)?) => {
-        $res.push(Asm::PaddedBlock { size: $a, padding: $b, blocks: $c, side: $d });
         evm_asm_vec!($res; $($($rest)*)?);
     };
     ($res:ident; Ref($expr:expr) $(, $($rest:tt)*)?) => {

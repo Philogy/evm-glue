@@ -2,7 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod assembler;
-pub use assembler::{assemble_full, validate_asm, AssembleError, AssembleResult};
+pub use assembler::{assemble_maximized, assemble_minimized};
 
 pub mod assembly;
 pub mod opcodes;
