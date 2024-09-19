@@ -99,7 +99,7 @@ The `assemble_minimized` function is the main entry point for assembling a strin
 It takes two arguments:
 - `asm: &mut Vec<Asm>`: This is the array containing all the assembly
 - `allow_push0: bool`: A boolean flag indicating whether you want to allow generated `PUSHx 0`
-opcodes to become `PUSH0`. Note this will not affect any explicitly defined pushes. Values like `Asm::Op(Opcode:PUSH3([0, 0, 0]))` will remain untouched.
+  opcodes to become `PUSH0`. Note this will not affect any explicitly defined pushes. Values like `Asm::Op(Opcode:PUSH3([0, 0, 0]))` will remain untouched.
 
 
 > [!INFO]
