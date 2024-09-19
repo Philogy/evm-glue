@@ -262,7 +262,9 @@ mod tests {
 
     #[test]
     fn test_value_to_ref_extra_bytes() {
+        assert_eq!(value_to_ref_extra_bytes(0, true), 0);
         assert_eq!(value_to_ref_extra_bytes(0, false), 1);
+
         assert_eq!(value_to_ref_extra_bytes(1, false), 1);
         assert_eq!(value_to_ref_extra_bytes(2, false), 1);
         assert_eq!(value_to_ref_extra_bytes(3, false), 1);
@@ -272,5 +274,18 @@ mod tests {
         assert_eq!(value_to_ref_extra_bytes(7, false), 1);
         assert_eq!(value_to_ref_extra_bytes(8, false), 1);
         assert_eq!(value_to_ref_extra_bytes(256, false), 2);
+        assert_eq!(value_to_ref_extra_bytes(65535, false), 2);
+        assert_eq!(value_to_ref_extra_bytes(65536, false), 3);
+
+        assert_eq!(value_to_ref_extra_bytes(1, true), 1);
+        assert_eq!(value_to_ref_extra_bytes(2, true), 1);
+        assert_eq!(value_to_ref_extra_bytes(3, true), 1);
+        assert_eq!(value_to_ref_extra_bytes(4, true), 1);
+        assert_eq!(value_to_ref_extra_bytes(5, true), 1);
+        assert_eq!(value_to_ref_extra_bytes(6, true), 1);
+        assert_eq!(value_to_ref_extra_bytes(7, true), 1);
+        assert_eq!(value_to_ref_extra_bytes(8, true), 1);
+        assert_eq!(value_to_ref_extra_bytes(256, true), 2);
+        assert_eq!(value_to_ref_extra_bytes(65536, true), 3);
     }
 }

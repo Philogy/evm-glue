@@ -253,7 +253,7 @@ impl Opcode {
             Self::SELFBALANCE => 0x47,
             Self::BASEFEE => 0x48,
             Self::BLOBHASH => 0x49,
-            Self::BLOBBASEFEE => 0x50,
+            Self::BLOBBASEFEE => 0x4a,
             // Control flow, Storage & Memory manipulation, runtime inspection 0x50 - 0x5e
             Self::POP => 0x50,
             Self::MLOAD => 0x51,
