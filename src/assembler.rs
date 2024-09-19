@@ -82,40 +82,54 @@ fn max_ref_extra_bytes(known_size: usize, total_refs: usize) -> u8 {
     ref_extra_bytes
 }
 
-pub fn assemble_maximized(asm: &[Asm]) -> Vec<u8> {
+#[derive(Debug, PartialEq, Eq)]
+pub enum AssembleError {
+    InvalidSetSize { chunk_index: usize },
+}
+
+pub fn assemble_maximized(asm: &[Asm], allow_push0: bool) -> Result<Vec<u8>, AssembleError> {
     let total_refs = asm
         .iter()
         .filter(|chunk| matches!(chunk, Asm::Ref(_)))
         .count();
     let known_size: usize = asm.iter().map(|chunk| chunk.size()).sum();
-    let ref_extra_bytes: u8 = max_ref_extra_bytes(known_size, total_refs);
+    let max_ref_extra_bytes: u8 = max_ref_extra_bytes(known_size, total_refs);
 
-    let (mark_map, total_size) = MarkMap::build(asm, ref_extra_bytes);
+    let (mark_map, total_size) = MarkMap::build(asm, max_ref_extra_bytes);
     let mut final_code = Vec::with_capacity(total_size);
 
-    asm.iter().enumerate().for_each(|(i, chunk)| match chunk {
-        Asm::Op(op) => op.append_to(&mut final_code),
-        Asm::Data(data) => final_code.extend(data),
-        Asm::Mark(_) => {}
-        Asm::Ref(MarkRef {
-            ref_type,
-            is_pushed,
-        }) => {
-            let value = mark_map.lookup_rt(i, ref_type);
-            if *is_pushed {
-                final_code.push(ref_extra_bytes + 0x5f);
+    asm.iter().enumerate().try_for_each(|(i, chunk)| {
+        match chunk {
+            Asm::Op(op) => op.append_to(&mut final_code),
+            Asm::Data(data) => final_code.extend(data),
+            Asm::Mark(_) => {}
+            Asm::Ref(MarkRef {
+                ref_type,
+                is_pushed,
+                set_size,
+            }) => {
+                let value = mark_map.lookup_rt(i, ref_type);
+                let ref_extra_bytes = set_size.unwrap_or(max_ref_extra_bytes);
+                let min_extra_bytes = value_to_ref_extra_bytes(value, allow_push0);
+                if ref_extra_bytes < min_extra_bytes {
+                    return Err(AssembleError::InvalidSetSize { chunk_index: i });
+                }
+                if *is_pushed {
+                    final_code.push(max_ref_extra_bytes + 0x5f);
+                }
+                let be_bytes = value.to_be_bytes();
+                final_code.extend(&be_bytes[be_bytes.len() - max_ref_extra_bytes as usize..]);
             }
-            let be_bytes = value.to_be_bytes();
-            final_code.extend(&be_bytes[be_bytes.len() - ref_extra_bytes as usize..]);
-        }
-    });
+        };
+        Ok(())
+    })?;
 
-    final_code
+    Ok(final_code)
 }
 
-const MAX_CHANGES: usize = 100;
+const MAX_CHANGES: usize = 10_000;
 
-pub fn assemble_minimized(asm: &[Asm], allow_push0: bool) -> Vec<u8> {
+pub fn assemble_minimized(asm: &[Asm], allow_push0: bool) -> Result<Vec<u8>, AssembleError> {
     let (mark_map, total_size) =
         {
             let total_refs = asm
@@ -133,15 +147,21 @@ pub fn assemble_minimized(asm: &[Asm], allow_push0: bool) -> Vec<u8> {
                 (total_size, made_a_change) = asm.iter().enumerate().fold(
                     (0, false),
                     |(offset, made_a_change), (i, chunk)| match chunk {
-                        Asm::Ref(MarkRef { ref_type, .. }) => (
-                            offset
-                                + chunk.size()
-                                + value_to_ref_extra_bytes(
-                                    mark_map.lookup_rt(i, ref_type),
-                                    allow_push0,
-                                ) as usize,
-                            made_a_change,
-                        ),
+                        Asm::Ref(MarkRef {
+                            ref_type, set_size, ..
+                        }) => {
+                            let extra_size = set_size.map_or_else(
+                                || {
+                                    value_to_ref_extra_bytes(
+                                        mark_map.lookup_rt(i, ref_type),
+                                        allow_push0,
+                                    ) as usize
+                                },
+                                |_| 0,
+                            );
+
+                            (offset + chunk.size() + extra_size, made_a_change)
+                        }
                         #[allow(clippy::identity_op)]
                         Asm::Mark(id) => (
                             offset + 0,
@@ -162,25 +182,33 @@ pub fn assemble_minimized(asm: &[Asm], allow_push0: bool) -> Vec<u8> {
 
     let mut final_code = Vec::with_capacity(total_size);
 
-    asm.iter().enumerate().for_each(|(i, chunk)| match chunk {
-        Asm::Op(op) => op.append_to(&mut final_code),
-        Asm::Data(data) => final_code.extend(data),
-        Asm::Mark(_) => {}
-        Asm::Ref(MarkRef {
-            ref_type,
-            is_pushed,
-        }) => {
-            let value = mark_map.lookup_rt(i, ref_type);
-            let ref_extra_bytes = value_to_ref_extra_bytes(value, allow_push0);
-            if *is_pushed {
-                final_code.push(ref_extra_bytes + 0x5f);
+    asm.iter().enumerate().try_for_each(|(i, chunk)| {
+        match chunk {
+            Asm::Op(op) => op.append_to(&mut final_code),
+            Asm::Data(data) => final_code.extend(data),
+            Asm::Mark(_) => {}
+            Asm::Ref(MarkRef {
+                ref_type,
+                is_pushed,
+                set_size,
+            }) => {
+                let value = mark_map.lookup_rt(i, ref_type);
+                let min_extra_bytes = value_to_ref_extra_bytes(value, allow_push0);
+                let ref_extra_bytes = set_size.unwrap_or_else(|| min_extra_bytes);
+                if ref_extra_bytes < min_extra_bytes {
+                    return Err(AssembleError::InvalidSetSize { chunk_index: i });
+                }
+                if *is_pushed {
+                    final_code.push(ref_extra_bytes + 0x5f);
+                }
+                let be_bytes = value.to_be_bytes();
+                final_code.extend(&be_bytes[be_bytes.len() - ref_extra_bytes as usize..]);
             }
-            let be_bytes = value.to_be_bytes();
-            final_code.extend(&be_bytes[be_bytes.len() - ref_extra_bytes as usize..]);
-        }
-    });
+        };
+        Ok(())
+    })?;
 
-    final_code
+    Ok(final_code)
 }
 
 fn value_to_ref_extra_bytes(value: usize, allow_push0: bool) -> u8 {
@@ -229,7 +257,7 @@ mod tests {
         }
 
         let min_out = assemble_minimized(&asm, true);
-        let max_out = assemble_maximized(&asm);
+        let max_out = assemble_maximized(&asm, false);
 
         assert_eq!(min_out, max_out);
     }
@@ -245,9 +273,9 @@ mod tests {
             Asm::mref(1),
         ];
 
-        let min_out_push0 = assemble_minimized(&asm, true);
-        let min_out = assemble_minimized(&asm, false);
-        let max_out = assemble_maximized(&asm);
+        let min_out_push0 = assemble_minimized(&asm, true).unwrap();
+        let min_out = assemble_minimized(&asm, false).unwrap();
+        let max_out = assemble_maximized(&asm, false).unwrap();
 
         assert_eq!(min_out_push0, hx!("5b000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005f610102"), "minimized not equal");
         assert_eq!(min_out, hx!("5b000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006000610103"), "minimized not equal");

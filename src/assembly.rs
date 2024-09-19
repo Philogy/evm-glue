@@ -21,15 +21,12 @@ impl fmt::Display for RefType {
 pub struct MarkRef {
     pub ref_type: RefType,
     pub is_pushed: bool,
+    pub set_size: Option<u8>,
 }
 
 impl MarkRef {
     fn min_size(&self) -> usize {
-        if self.is_pushed {
-            1
-        } else {
-            0
-        }
+        (if self.is_pushed { 1 } else { 0 }) + self.set_size.unwrap_or_default() as usize
     }
 }
 
@@ -50,11 +47,22 @@ impl fmt::Display for Asm {
             Self::Ref(MarkRef {
                 ref_type,
                 is_pushed,
+                set_size,
             }) => {
                 if *is_pushed {
-                    write!(f, "PUSH {}", ref_type)
+                    let size_str = if let Some(size) = set_size {
+                        format!("{}", size)
+                    } else {
+                        String::new()
+                    };
+                    write!(f, "PUSH{} {}", size_str, ref_type)
                 } else {
-                    write!(f, "({})", ref_type)
+                    let size_str = if let Some(size) = set_size {
+                        format!("{}:", size)
+                    } else {
+                        String::new()
+                    };
+                    write!(f, "({}{})", size_str, ref_type)
                 }
             }
         }
@@ -75,6 +83,7 @@ impl Asm {
         Self::Ref(MarkRef {
             ref_type: RefType::Direct(mid),
             is_pushed: true,
+            set_size: None,
         })
     }
 
@@ -82,6 +91,7 @@ impl Asm {
         Self::Ref(MarkRef {
             ref_type: RefType::Delta(start_mid, end_mid),
             is_pushed: true,
+            set_size: None,
         })
     }
 
@@ -89,6 +99,7 @@ impl Asm {
         Self::Ref(MarkRef {
             ref_type: RefType::Direct(mid),
             is_pushed: false,
+            set_size: None,
         })
     }
 
@@ -96,6 +107,15 @@ impl Asm {
         Self::Ref(MarkRef {
             ref_type: RefType::Delta(start_mid, end_mid),
             is_pushed: false,
+            set_size: None,
+        })
+    }
+
+    pub fn set_mref(ref_type: RefType, is_pushed: bool, set_size: u8) -> Self {
+        Self::Ref(MarkRef {
+            ref_type,
+            is_pushed,
+            set_size: Some(set_size),
         })
     }
 }
