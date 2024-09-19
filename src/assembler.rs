@@ -74,19 +74,21 @@ impl MarkMap {
     }
 }
 
+fn max_ref_extra_bytes(known_size: usize, total_refs: usize) -> u8 {
+    let mut ref_extra_bytes: u8 = 1;
+    while 1 << (8 * ref_extra_bytes) < known_size + total_refs * (ref_extra_bytes as usize) {
+        ref_extra_bytes += 1;
+    }
+    ref_extra_bytes
+}
+
 pub fn assemble_maximized(asm: &[Asm]) -> Vec<u8> {
     let total_refs = asm
         .iter()
         .filter(|chunk| matches!(chunk, Asm::Ref(_)))
         .count();
     let known_size: usize = asm.iter().map(|chunk| chunk.size()).sum();
-    let ref_extra_bytes: u8 = {
-        let mut ref_extra_bytes: u8 = 1;
-        while 1 << (8 * ref_extra_bytes) < known_size + total_refs * (ref_extra_bytes as usize) {
-            ref_extra_bytes += 1;
-        }
-        ref_extra_bytes
-    };
+    let ref_extra_bytes: u8 = max_ref_extra_bytes(known_size, total_refs);
 
     let (mark_map, total_size) = MarkMap::build(asm, ref_extra_bytes);
     let mut final_code = Vec::with_capacity(total_size);
@@ -114,23 +116,14 @@ pub fn assemble_maximized(asm: &[Asm]) -> Vec<u8> {
 const MAX_CHANGES: usize = 100;
 
 pub fn assemble_minimized(asm: &[Asm], allow_push0: bool) -> Vec<u8> {
-    let total_refs = asm
-        .iter()
-        .filter(|chunk| matches!(chunk, Asm::Ref(_)))
-        .count();
-    let known_size: usize = asm.iter().map(|chunk| chunk.size()).sum();
-
     let (mark_map, total_size) =
         {
-            let ref_extra_bytes: u8 = {
-                let mut ref_extra_bytes: u8 = 1;
-                while 1 << (8 * ref_extra_bytes)
-                    < known_size + total_refs * (ref_extra_bytes as usize)
-                {
-                    ref_extra_bytes += 1;
-                }
-                ref_extra_bytes
-            };
+            let total_refs = asm
+                .iter()
+                .filter(|chunk| matches!(chunk, Asm::Ref(_)))
+                .count();
+            let known_size: usize = asm.iter().map(|chunk| chunk.size()).sum();
+            let ref_extra_bytes: u8 = max_ref_extra_bytes(known_size, total_refs);
             let (mut mark_map, mut total_size) = MarkMap::build(asm, ref_extra_bytes);
 
             let mut made_a_change = true;
@@ -149,6 +142,7 @@ pub fn assemble_minimized(asm: &[Asm], allow_push0: bool) -> Vec<u8> {
                                 ) as usize,
                             made_a_change,
                         ),
+                        #[allow(clippy::identity_op)]
                         Asm::Mark(id) => (
                             offset + 0,
                             made_a_change || mark_map.set_mark_offset(*id, offset),
