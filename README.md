@@ -19,7 +19,7 @@ it into EVM bytecode.
 ## Quickstart, A full example:
 
 ```rust
-use evm_glue::assembler::assemble_maximized;
+use evm_glue::assembler::assemble_minimized;
 use evm_glue::assembly::Asm;
 use evm_glue::data;
 use evm_glue::opcodes::Opcode::*;
@@ -59,7 +59,7 @@ fn main() {
         Op(REVERT),
     ];
 
-    let runtime_bytecode = assemble_maximized(&runtime);
+    let runtime_bytecode = assemble_minimized(&runtime, true).unwrap();
 
     let mut deploy_marks = MarkTracker::default();
     let runtime_start = deploy_marks.next_mark();
@@ -80,7 +80,7 @@ fn main() {
         Mark(runtime_end),
     ];
 
-    let deploy_bytecode = assemble_maximized(&deploy);
+    let deploy_bytecode = assemble_minimized(&deploy, true).unwrap();
 
     println!("runtime bytecode: {}", hex::encode(runtime_bytecode));
     println!("deploy bytecode: {}", hex::encode(deploy_bytecode));
@@ -90,22 +90,20 @@ fn main() {
 ## API
 
 The overarching API is that you create a list of assembly blocks (`Vec<Asm>`) and feed it into
-`assembler::assemble_full` that then turns it into one long string of bytecode. Blocks and their 
+`assembler::assemble_minimized` that then turns it into one long string of bytecode. Blocks and their 
 types are found under `evm_glue::assembly`.
 
-### Assembling (`assembler::assemble_full`)
+### Assembling (`assembler::assemble_minimized`)
 
-The `assemble_full` function is the main entry point for assembling a string of assembly blocks.
+The `assemble_minimized` function is the main entry point for assembling a string of assembly blocks.
 It takes two arguments:
 - `asm: &mut Vec<Asm>`: This is the array containing all the assembly
-- `minimize_refs: bool`: A boolean flag indicating whether you want the enable the reference
-  size minimization step. If set to `false` all references will use the same amount of bytes.
+- `allow_push0: bool`: A boolean flag indicating whether you want to allow generated `PUSHx 0`
+opcodes to become `PUSH0`. Note this will not affect any explicitly defined pushes. Values like `Asm::Op(Opcode:PUSH3([0, 0, 0]))` will remain untouched.
 
 
-> [!IMPORTANT]
-> Note that the passed `asm` object will be modified in-place, with the assemble step setting
-> concrete sizes for all the references. Be sure to `.clone()` your `asm` object before passing it
-> in if you wish to retain it in its original, size unset form.
+> [!INFO]
+> If you want a slightly simpler & marginally faster compilation process you can use `assemble_maximized` which will use the same _maximal_ size for all references.
 
 ### Op
 
@@ -145,7 +143,7 @@ let asm = vec![
 ```
 > [!IMPORTANT]  
 > If you're manually allocating mark IDs ensure that they start at 0 and stay in a concise range.
-> This is for performance reasons as a simple `Vec` is used under the hood as a mark => offset map.
+> This is for performance reasons as a simple `Vec` is used under the hood as the mark => offset map.
 
 
 **`MarkTracker` helper**
