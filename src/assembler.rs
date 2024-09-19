@@ -37,6 +37,12 @@ impl MarkMap {
         (Self(inner_mark_map), total_size)
     }
 
+    fn set_mark_offset(&mut self, index: usize, offset: usize) -> bool {
+        let prev_offset = self.0[index];
+        self.0[index] = Some(offset);
+        prev_offset != Some(offset)
+    }
+
     fn get_offset(&self, index: usize, id: usize) -> usize {
         self.0.get(id).and_then(|value| *value).unwrap_or_else(|| {
             #[cfg(feature = "sanity-checks")]
@@ -105,52 +111,60 @@ pub fn assemble_maximized(asm: &[Asm]) -> Vec<u8> {
     final_code
 }
 
-pub fn assemble_minimized(asm: &[Asm]) -> Vec<u8> {
+const MAX_CHANGES: usize = 100;
+
+pub fn assemble_minimized(asm: &[Asm], allow_push0: bool) -> Vec<u8> {
     let total_refs = asm
         .iter()
         .filter(|chunk| matches!(chunk, Asm::Ref(_)))
         .count();
     let known_size: usize = asm.iter().map(|chunk| chunk.size()).sum();
-    let ref_extra_bytes: u8 = {
-        let mut ref_extra_bytes: u8 = 1;
-        while 1 << (8 * ref_extra_bytes) < known_size + total_refs * (ref_extra_bytes as usize) {
-            ref_extra_bytes += 1;
-        }
-        ref_extra_bytes
-    };
 
-    let (mark_map, total_size) = {
-        let (mut mark_map, mut total_size) = MarkMap::build(asm, ref_extra_bytes);
+    let (mark_map, total_size) =
+        {
+            let ref_extra_bytes: u8 = {
+                let mut ref_extra_bytes: u8 = 1;
+                while 1 << (8 * ref_extra_bytes)
+                    < known_size + total_refs * (ref_extra_bytes as usize)
+                {
+                    ref_extra_bytes += 1;
+                }
+                ref_extra_bytes
+            };
+            let (mut mark_map, mut total_size) = MarkMap::build(asm, ref_extra_bytes);
 
-        let mut made_a_change = true;
+            let mut made_a_change = true;
+            let mut change_count = 1;
 
-        while made_a_change {
-            (total_size, made_a_change) =
-                asm.iter()
-                    .enumerate()
-                    .fold((0, false), |(offset, made_a_change), (i, chunk)| {
-                        let (new_offset, made_a_change) = match chunk {
-                            Asm::Ref(MarkRef { ref_type, .. }) => (
-                                offset
-                                    + chunk.size()
-                                    + value_to_ref_extra_bytes(mark_map.lookup_rt(i, ref_type))
-                                        as usize,
-                                made_a_change,
-                            ),
-                            Asm::Mark(id) => {
-                                let prev_offset = mark_map.0[*id];
-                                mark_map.0[*id] = Some(offset);
-                                (offset, made_a_change || prev_offset != Some(offset))
-                            }
-                            _ => (offset + chunk.size(), made_a_change),
-                        };
+            while made_a_change {
+                (total_size, made_a_change) = asm.iter().enumerate().fold(
+                    (0, false),
+                    |(offset, made_a_change), (i, chunk)| match chunk {
+                        Asm::Ref(MarkRef { ref_type, .. }) => (
+                            offset
+                                + chunk.size()
+                                + value_to_ref_extra_bytes(
+                                    mark_map.lookup_rt(i, ref_type),
+                                    allow_push0,
+                                ) as usize,
+                            made_a_change,
+                        ),
+                        Asm::Mark(id) => (
+                            offset + 0,
+                            made_a_change || mark_map.set_mark_offset(*id, offset),
+                        ),
+                        _ => (offset + chunk.size(), made_a_change),
+                    },
+                );
+                change_count += 1;
+                assert!(
+                    change_count <= MAX_CHANGES,
+                    "Max changes exceeded, likely infinite loop, report bug"
+                );
+            }
 
-                        (new_offset, made_a_change)
-                    });
-        }
-
-        (mark_map, total_size)
-    };
+            (mark_map, total_size)
+        };
 
     let mut final_code = Vec::with_capacity(total_size);
 
@@ -163,6 +177,7 @@ pub fn assemble_minimized(asm: &[Asm]) -> Vec<u8> {
             is_pushed,
         }) => {
             let value = mark_map.lookup_rt(i, ref_type);
+            let ref_extra_bytes = value_to_ref_extra_bytes(value, allow_push0);
             if *is_pushed {
                 final_code.push(ref_extra_bytes + 0x5f);
             }
@@ -174,8 +189,12 @@ pub fn assemble_minimized(asm: &[Asm]) -> Vec<u8> {
     final_code
 }
 
-fn value_to_ref_extra_bytes(value: usize) -> u8 {
-    value.checked_ilog2().unwrap_or_default() as u8 / 8 + 1
+fn value_to_ref_extra_bytes(value: usize, allow_push0: bool) -> u8 {
+    match (value, allow_push0) {
+        (0, true) => 0,
+        (0, false) => 1,
+        (x, _) => x.checked_ilog2().unwrap() as u8 / 8 + 1,
+    }
 }
 
 #[cfg(test)]
@@ -215,7 +234,7 @@ mod tests {
             println!("{}", block);
         }
 
-        let min_out = assemble_minimized(&asm);
+        let min_out = assemble_minimized(&asm, true);
         let max_out = assemble_maximized(&asm);
 
         assert_eq!(min_out, max_out);
@@ -232,10 +251,26 @@ mod tests {
             Asm::mref(1),
         ];
 
-        let min_out = assemble_minimized(&asm);
+        let min_out_push0 = assemble_minimized(&asm, true);
+        let min_out = assemble_minimized(&asm, false);
         let max_out = assemble_maximized(&asm);
 
-        assert_eq!(min_out, hx!("5b00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000610000610103"), "minimized not equal");
+        assert_eq!(min_out_push0, hx!("5b000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005f610102"), "minimized not equal");
+        assert_eq!(min_out, hx!("5b000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006000610103"), "minimized not equal");
         assert_eq!(max_out, hx!("5b00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000610000610104"), "maximized not equal");
+    }
+
+    #[test]
+    fn test_value_to_ref_extra_bytes() {
+        assert_eq!(value_to_ref_extra_bytes(0, false), 1);
+        assert_eq!(value_to_ref_extra_bytes(1, false), 1);
+        assert_eq!(value_to_ref_extra_bytes(2, false), 1);
+        assert_eq!(value_to_ref_extra_bytes(3, false), 1);
+        assert_eq!(value_to_ref_extra_bytes(4, false), 1);
+        assert_eq!(value_to_ref_extra_bytes(5, false), 1);
+        assert_eq!(value_to_ref_extra_bytes(6, false), 1);
+        assert_eq!(value_to_ref_extra_bytes(7, false), 1);
+        assert_eq!(value_to_ref_extra_bytes(8, false), 1);
+        assert_eq!(value_to_ref_extra_bytes(256, false), 2);
     }
 }
