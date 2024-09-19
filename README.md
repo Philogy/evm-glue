@@ -14,7 +14,9 @@ it into EVM bytecode.
     references)
 
 **Other TODOs:**
-- [ ] Add tests
+- [x] Add tests
+- [ ] Add more tests
+- [ ] Simple parser / frontend
 
 ## Quickstart, A full example:
 
