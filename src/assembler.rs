@@ -29,7 +29,6 @@ impl MarkMap {
                 }
                 _ => offset + chunk.size(),
             };
-            println!("[{}] {}     {} -> {}", index, chunk, offset, new_offset);
 
             new_offset
         });
