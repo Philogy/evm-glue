@@ -16,8 +16,10 @@ impl MarkMap {
             .map(|max_id| max_id + 1)
             .unwrap_or_default();
         let mut inner_mark_map = vec![None; mark_map_size];
-        let total_size = asm.iter().enumerate().fold(0, |offset, (index, chunk)| {
-            let new_offset = match chunk {
+        let total_size = asm
+            .iter()
+            .enumerate()
+            .fold(0, |offset, (index, chunk)| match chunk {
                 Asm::Ref(_) => offset + chunk.size() + ref_extra_bytes as usize,
                 Asm::Mark(id) => {
                     #[cfg(feature = "sanity-checks")]
@@ -28,10 +30,7 @@ impl MarkMap {
                     offset
                 }
                 _ => offset + chunk.size(),
-            };
-
-            new_offset
-        });
+            });
 
         (Self(inner_mark_map), total_size)
     }
