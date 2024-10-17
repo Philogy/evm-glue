@@ -61,7 +61,7 @@ fn main() {
         Op(REVERT),
     ];
 
-    let runtime_bytecode = assemble_minimized(&runtime, true).unwrap();
+    let (_, runtime_bytecode) = assemble_minimized(&runtime, true).unwrap();
 
     let mut deploy_marks = MarkTracker::default();
     let runtime_start = deploy_marks.next_mark();
@@ -82,7 +82,7 @@ fn main() {
         Mark(runtime_end),
     ];
 
-    let deploy_bytecode = assemble_minimized(&deploy, true).unwrap();
+    let (_, deploy_bytecode) = assemble_minimized(&deploy, true).unwrap();
 
     println!("runtime bytecode: {}", hex::encode(runtime_bytecode));
     println!("deploy bytecode: {}", hex::encode(deploy_bytecode));

@@ -1,7 +1,7 @@
 use crate::assembly::{Asm, MarkRef, RefType};
 
 #[derive(Debug)]
-struct MarkMap(Vec<Option<usize>>);
+pub struct MarkMap(Vec<Option<usize>>);
 
 impl MarkMap {
     /// Builds a mark map assuming all references use the same `ref_extra_bytes`
@@ -53,7 +53,7 @@ impl MarkMap {
         })
     }
 
-    fn lookup_rt(&self, index: usize, rt: &RefType) -> usize {
+    pub fn lookup_rt(&self, index: usize, rt: &RefType) -> usize {
         match rt {
             RefType::Delta(start_id, end_id) => {
                 let start_offset = self.get_offset(index, *start_id);
@@ -85,7 +85,10 @@ pub enum AssembleError {
     InvalidSetSize { chunk_index: usize },
 }
 
-pub fn assemble_maximized(asm: &[Asm], allow_push0: bool) -> Result<Vec<u8>, AssembleError> {
+pub fn assemble_maximized(
+    asm: &[Asm],
+    allow_push0: bool,
+) -> Result<(MarkMap, Vec<u8>), AssembleError> {
     let total_refs = asm
         .iter()
         .filter(|chunk| matches!(chunk, Asm::Ref(_)))
@@ -122,12 +125,15 @@ pub fn assemble_maximized(asm: &[Asm], allow_push0: bool) -> Result<Vec<u8>, Ass
         Ok(())
     })?;
 
-    Ok(final_code)
+    Ok((mark_map, final_code))
 }
 
 const MAX_CHANGES: usize = 10_000;
 
-pub fn assemble_minimized(asm: &[Asm], allow_push0: bool) -> Result<Vec<u8>, AssembleError> {
+pub fn assemble_minimized(
+    asm: &[Asm],
+    allow_push0: bool,
+) -> Result<(MarkMap, Vec<u8>), AssembleError> {
     let (mark_map, total_size) =
         {
             let total_refs = asm
@@ -206,7 +212,7 @@ pub fn assemble_minimized(asm: &[Asm], allow_push0: bool) -> Result<Vec<u8>, Ass
         Ok(())
     })?;
 
-    Ok(final_code)
+    Ok((mark_map, final_code))
 }
 
 fn value_to_ref_extra_bytes(value: usize, allow_push0: bool) -> u8 {
@@ -254,8 +260,8 @@ mod tests {
             println!("{}", block);
         }
 
-        let min_out = assemble_minimized(&asm, true);
-        let max_out = assemble_maximized(&asm, false);
+        let (_, min_out) = assemble_minimized(&asm, true).unwrap();
+        let (_, max_out) = assemble_maximized(&asm, false).unwrap();
 
         assert_eq!(min_out, max_out);
     }
@@ -271,9 +277,9 @@ mod tests {
             Asm::mref(1),
         ];
 
-        let min_out_push0 = assemble_minimized(&asm, true).unwrap();
-        let min_out = assemble_minimized(&asm, false).unwrap();
-        let max_out = assemble_maximized(&asm, false).unwrap();
+        let (_, min_out_push0) = assemble_minimized(&asm, true).unwrap();
+        let (_, min_out) = assemble_minimized(&asm, false).unwrap();
+        let (_, max_out) = assemble_maximized(&asm, false).unwrap();
 
         assert_eq!(min_out_push0, hx!("5b000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005f610102"), "minimized not equal");
         assert_eq!(min_out, hx!("5b000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006000610103"), "minimized not equal");
