@@ -25,7 +25,7 @@ macro_rules! push_match_formats {
     };
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[allow(dead_code)]
 pub enum Opcode {
     STOP,

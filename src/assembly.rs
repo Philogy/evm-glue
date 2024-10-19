@@ -2,7 +2,7 @@ use crate::opcodes::Opcode;
 use hex;
 use std::fmt;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RefType {
     Direct(usize),
     Delta(usize, usize),
@@ -17,7 +17,7 @@ impl fmt::Display for RefType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MarkRef {
     pub ref_type: RefType,
     pub is_pushed: bool,
@@ -30,7 +30,7 @@ impl MarkRef {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Asm {
     Op(Opcode),
     Data(Vec<u8>),
