@@ -25,8 +25,12 @@ pub struct MarkRef {
 }
 
 impl MarkRef {
-    fn min_size(&self) -> usize {
-        (if self.is_pushed { 1 } else { 0 }) + self.set_size.unwrap_or_default() as usize
+    fn base_size(&self) -> usize {
+        if self.is_pushed {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -70,12 +74,12 @@ impl fmt::Display for Asm {
 }
 
 impl Asm {
-    pub fn size(&self) -> usize {
+    pub fn base_size(&self) -> usize {
         match self {
             Self::Op(i) => i.len(),
             Self::Data(d) => d.len(),
             Self::Mark(_) => 0,
-            Self::Ref(mref) => mref.min_size(),
+            Self::Ref(mref) => mref.base_size(),
         }
     }
 

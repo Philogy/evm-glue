@@ -20,16 +20,15 @@ impl MarkMap {
             .iter()
             .enumerate()
             .fold(0, |offset, (index, chunk)| match chunk {
-                Asm::Ref(_) => offset + chunk.size() + ref_extra_bytes as usize,
+                Asm::Ref(_) => offset + chunk.base_size() + ref_extra_bytes as usize,
                 Asm::Mark(id) => {
-                    #[cfg(feature = "sanity-checks")]
                     if inner_mark_map[*id].is_some() {
                         panic!("Mark with duplicate id {} at index {}", id, index);
                     }
                     inner_mark_map[*id] = Some(offset);
                     offset
                 }
-                _ => offset + chunk.size(),
+                _ => offset + chunk.base_size(),
             });
 
         (Self(inner_mark_map), total_size)
@@ -43,13 +42,7 @@ impl MarkMap {
 
     fn get_offset(&self, index: usize, id: usize) -> usize {
         self.0.get(id).and_then(|value| *value).unwrap_or_else(|| {
-            #[cfg(feature = "sanity-checks")]
-            {
-                panic!("Reference to nonexistent mark {} at index {}", id, index)
-            };
-
-            #[cfg(not(feature = "sanity-checks"))]
-            Default::default()
+            panic!("Reference to nonexistent mark {} at index {}", id, index);
         })
     }
 
@@ -58,14 +51,7 @@ impl MarkMap {
             RefType::Delta(start_id, end_id) => {
                 let start_offset = self.get_offset(index, *start_id);
                 let end_offset = self.get_offset(index, *end_id);
-                #[cfg(feature = "sanity-checks")]
-                if end_offset < start_offset {
-                    panic!(
-                        "Delta reference at {} has end offset {} (id: {}) before start {} (id: {})",
-                        index, end_offset, end_id, start_offset, start_id
-                    );
-                }
-                end_offset.wrapping_sub(start_offset)
+                end_offset - start_offset
             }
             RefType::Direct(id) => self.get_offset(index, *id),
         }
@@ -85,6 +71,7 @@ pub enum AssembleError {
     InvalidSetSize { chunk_index: usize },
 }
 
+/// Assemble using the worst case size push opcodes for references.
 pub fn assemble_maximized(
     asm: &[Asm],
     allow_push0: bool,
@@ -93,7 +80,7 @@ pub fn assemble_maximized(
         .iter()
         .filter(|chunk| matches!(chunk, Asm::Ref(_)))
         .count();
-    let known_size: usize = asm.iter().map(|chunk| chunk.size()).sum();
+    let known_size: usize = asm.iter().map(|chunk| chunk.base_size()).sum();
     let max_ref_extra_bytes: u8 = max_ref_extra_bytes(known_size, total_refs);
 
     let (mark_map, total_size) = MarkMap::build(asm, max_ref_extra_bytes);
@@ -111,7 +98,7 @@ pub fn assemble_maximized(
             }) => {
                 let value = mark_map.lookup_rt(i, ref_type);
                 let ref_extra_bytes = set_size.unwrap_or(max_ref_extra_bytes);
-                let min_extra_bytes = value_to_ref_extra_bytes(value, allow_push0);
+                let min_extra_bytes = value_push_size(value, allow_push0);
                 if ref_extra_bytes < min_extra_bytes {
                     return Err(AssembleError::InvalidSetSize { chunk_index: i });
                 }
@@ -130,59 +117,54 @@ pub fn assemble_maximized(
 
 const MAX_CHANGES: usize = 10_000;
 
+/// Assemble minimizing the push opcodes used for references.
 pub fn assemble_minimized(
     asm: &[Asm],
     allow_push0: bool,
 ) -> Result<(MarkMap, Vec<u8>), AssembleError> {
-    let (mark_map, total_size) =
-        {
-            let total_refs = asm
+    let (mark_map, total_size) = {
+        let total_refs = asm
+            .iter()
+            .filter(|chunk| matches!(chunk, Asm::Ref(_)))
+            .count();
+        let known_size: usize = asm.iter().map(|chunk| chunk.base_size()).sum();
+        let ref_extra_bytes: u8 = max_ref_extra_bytes(known_size, total_refs);
+        let (mut mark_map, mut total_size) = MarkMap::build(asm, ref_extra_bytes);
+
+        let mut made_a_change = true;
+        let mut change_count = 1;
+
+        while made_a_change {
+            made_a_change = false;
+            total_size = asm
                 .iter()
-                .filter(|chunk| matches!(chunk, Asm::Ref(_)))
-                .count();
-            let known_size: usize = asm.iter().map(|chunk| chunk.size()).sum();
-            let ref_extra_bytes: u8 = max_ref_extra_bytes(known_size, total_refs);
-            let (mut mark_map, mut total_size) = MarkMap::build(asm, ref_extra_bytes);
-
-            let mut made_a_change = true;
-            let mut change_count = 1;
-
-            while made_a_change {
-                (total_size, made_a_change) = asm.iter().enumerate().fold(
-                    (0, false),
-                    |(offset, made_a_change), (i, chunk)| match chunk {
-                        Asm::Ref(MarkRef {
-                            ref_type, set_size, ..
-                        }) => {
-                            let extra_size = set_size.map_or_else(
-                                || {
-                                    value_to_ref_extra_bytes(
-                                        mark_map.lookup_rt(i, ref_type),
-                                        allow_push0,
-                                    ) as usize
-                                },
-                                |_| 0,
-                            );
-
-                            (offset + chunk.size() + extra_size, made_a_change)
+                .enumerate()
+                .fold(0, |offset, (i, chunk)| match chunk {
+                    Asm::Ref(MarkRef {
+                        ref_type, set_size, ..
+                    }) => {
+                        let ref_size = set_size.unwrap_or_else(|| {
+                            value_push_size(mark_map.lookup_rt(i, ref_type), allow_push0)
+                        }) as usize;
+                        offset + chunk.base_size() + ref_size
+                    }
+                    Asm::Mark(id) => {
+                        if mark_map.set_mark_offset(*id, offset) {
+                            made_a_change = true;
                         }
-                        #[allow(clippy::identity_op)]
-                        Asm::Mark(id) => (
-                            offset + 0,
-                            made_a_change || mark_map.set_mark_offset(*id, offset),
-                        ),
-                        _ => (offset + chunk.size(), made_a_change),
-                    },
-                );
-                change_count += 1;
-                assert!(
-                    change_count <= MAX_CHANGES,
-                    "Max changes exceeded, likely infinite loop, report bug"
-                );
-            }
+                        offset
+                    }
+                    _ => offset + chunk.base_size(),
+                });
+            change_count += 1;
+            assert!(
+                change_count <= MAX_CHANGES,
+                "Max changes exceeded, likely infinite loop, report bug"
+            );
+        }
 
-            (mark_map, total_size)
-        };
+        (mark_map, total_size)
+    };
 
     let mut final_code = Vec::with_capacity(total_size);
 
@@ -197,7 +179,7 @@ pub fn assemble_minimized(
                 set_size,
             }) => {
                 let value = mark_map.lookup_rt(i, ref_type);
-                let min_extra_bytes = value_to_ref_extra_bytes(value, allow_push0);
+                let min_extra_bytes = value_push_size(value, allow_push0);
                 let ref_extra_bytes = set_size.unwrap_or_else(|| min_extra_bytes);
                 if ref_extra_bytes < min_extra_bytes {
                     return Err(AssembleError::InvalidSetSize { chunk_index: i });
@@ -215,7 +197,7 @@ pub fn assemble_minimized(
     Ok((mark_map, final_code))
 }
 
-fn value_to_ref_extra_bytes(value: usize, allow_push0: bool) -> u8 {
+fn value_push_size(value: usize, allow_push0: bool) -> u8 {
     match (value, allow_push0) {
         (0, true) => 0,
         (0, false) => 1,
@@ -288,30 +270,30 @@ mod tests {
 
     #[test]
     fn test_value_to_ref_extra_bytes() {
-        assert_eq!(value_to_ref_extra_bytes(0, true), 0);
-        assert_eq!(value_to_ref_extra_bytes(0, false), 1);
+        assert_eq!(value_push_size(0, true), 0);
+        assert_eq!(value_push_size(0, false), 1);
 
-        assert_eq!(value_to_ref_extra_bytes(1, false), 1);
-        assert_eq!(value_to_ref_extra_bytes(2, false), 1);
-        assert_eq!(value_to_ref_extra_bytes(3, false), 1);
-        assert_eq!(value_to_ref_extra_bytes(4, false), 1);
-        assert_eq!(value_to_ref_extra_bytes(5, false), 1);
-        assert_eq!(value_to_ref_extra_bytes(6, false), 1);
-        assert_eq!(value_to_ref_extra_bytes(7, false), 1);
-        assert_eq!(value_to_ref_extra_bytes(8, false), 1);
-        assert_eq!(value_to_ref_extra_bytes(256, false), 2);
-        assert_eq!(value_to_ref_extra_bytes(65535, false), 2);
-        assert_eq!(value_to_ref_extra_bytes(65536, false), 3);
+        assert_eq!(value_push_size(1, false), 1);
+        assert_eq!(value_push_size(2, false), 1);
+        assert_eq!(value_push_size(3, false), 1);
+        assert_eq!(value_push_size(4, false), 1);
+        assert_eq!(value_push_size(5, false), 1);
+        assert_eq!(value_push_size(6, false), 1);
+        assert_eq!(value_push_size(7, false), 1);
+        assert_eq!(value_push_size(8, false), 1);
+        assert_eq!(value_push_size(256, false), 2);
+        assert_eq!(value_push_size(65535, false), 2);
+        assert_eq!(value_push_size(65536, false), 3);
 
-        assert_eq!(value_to_ref_extra_bytes(1, true), 1);
-        assert_eq!(value_to_ref_extra_bytes(2, true), 1);
-        assert_eq!(value_to_ref_extra_bytes(3, true), 1);
-        assert_eq!(value_to_ref_extra_bytes(4, true), 1);
-        assert_eq!(value_to_ref_extra_bytes(5, true), 1);
-        assert_eq!(value_to_ref_extra_bytes(6, true), 1);
-        assert_eq!(value_to_ref_extra_bytes(7, true), 1);
-        assert_eq!(value_to_ref_extra_bytes(8, true), 1);
-        assert_eq!(value_to_ref_extra_bytes(256, true), 2);
-        assert_eq!(value_to_ref_extra_bytes(65536, true), 3);
+        assert_eq!(value_push_size(1, true), 1);
+        assert_eq!(value_push_size(2, true), 1);
+        assert_eq!(value_push_size(3, true), 1);
+        assert_eq!(value_push_size(4, true), 1);
+        assert_eq!(value_push_size(5, true), 1);
+        assert_eq!(value_push_size(6, true), 1);
+        assert_eq!(value_push_size(7, true), 1);
+        assert_eq!(value_push_size(8, true), 1);
+        assert_eq!(value_push_size(256, true), 2);
+        assert_eq!(value_push_size(65536, true), 3);
     }
 }
