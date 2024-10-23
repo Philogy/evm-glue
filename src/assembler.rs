@@ -201,7 +201,7 @@ fn value_push_size(value: usize, allow_push0: bool) -> u8 {
     match (value, allow_push0) {
         (0, true) => 0,
         (0, false) => 1,
-        (x, _) => x.checked_ilog2().unwrap() as u8 / 8 + 1,
+        (x, _) => x.ilog2() as u8 / 8 + 1,
     }
 }
 
