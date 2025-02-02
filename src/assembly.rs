@@ -133,7 +133,7 @@ impl Asm {
 macro_rules! data {
     ($bytes:literal) => {{
         use hex_literal::hex;
-        Asm::Data(hex!($bytes).into())
+        $crate::assembly::Asm::Data(hex!($bytes).into())
     }};
 }
 
@@ -142,7 +142,7 @@ macro_rules! data {
 macro_rules! evm_asm {
     // Capture everything into a tuple and forward it to the internal handler
     ($($tt:tt)*) => {{
-        let mut result = Vec::new();
+        let mut result = ::std::vec::Vec::new();
         $crate::evm_asm_vec!(result; $($tt)*);
         result
     }};
