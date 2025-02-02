@@ -34,11 +34,16 @@ impl MarkRef {
     }
 }
 
+/// An atomic unit of assembly
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Asm {
+    /// A well typed EVM opcode. `Opcode::UNKNOWN(u8)` for unrecognized instructions.
     Op(Opcode),
+    /// Raw bytes.
     Data(Vec<u8>),
+    /// A sizeless marker that can be referenced. Does not generate any code.
     Mark(usize),
+    /// A reference to marks that'll resolve to the byte offset of the referenced mark(s).
     Ref(MarkRef),
 }
 
