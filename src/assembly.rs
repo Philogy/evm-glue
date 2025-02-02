@@ -138,7 +138,7 @@ macro_rules! evm_asm {
     // Capture everything into a tuple and forward it to the internal handler
     ($($tt:tt)*) => {{
         let mut result = Vec::new();
-        evm_asm_vec!(result; $($tt)*);
+        $crate::evm_asm_vec!(result; $($tt)*);
         result
     }};
 }
@@ -225,36 +225,36 @@ macro_rules! evm_asm_vec {
     // Non-opcode variant matchers take precedent
     ($res:ident; Mark($expr:expr) $(, $($rest:tt)*)?) => {
         $res.push(Asm::Mark($expr));
-        evm_asm_vec!($res; $($($rest)*)?);
+        $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
     ($res:ident; Data($lit:literal) $(, $($rest:tt)*)?) => {
         $res.push(data!($lit));
-        evm_asm_vec!($res; $($($rest)*)?);
+        $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
     ($res:ident; Ref($expr:expr) $(, $($rest:tt)*)?) => {
         $res.push(Ref($expr));
-        evm_asm_vec!($res; $($($rest)*)?);
+        $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
     ($res:ident; Op($expr:expr) $(, $($rest:tt)*)?) => {
         $res.push(Op($expr));
-        evm_asm_vec!($res; $($($rest)*)?);
+        $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
     // Match any qualified Asm variants
     ($res:ident; Asm::$variant:ident($($expr:expr),*) $(, $($rest:tt)*)?) => {
         $res.push(Asm::$variant($($expr),*));
-        evm_asm_vec!($res; $($($rest)*)?);
+        $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
     // Allow for passing in var idents.
     ($res:ident; VAR $var:ident $(, $($rest:tt)*)?) => {
         $res.push($var);
-        evm_asm_vec!($res; $($($rest)*)?);
+        $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
     // Assume anything else is an opcode
     ($res:ident; $head:expr $(, $($rest:tt)*)?) => {
         // TODO: Could further pattern match to allow for ambiguous functions / other types of
         // exprs.
         $res.push(Op($head));
-        evm_asm_vec!($res; $($($rest)*)?);
+        $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
     // Terminal case: all tokens have been consumed
     ($res:ident;) => {};
