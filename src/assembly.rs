@@ -229,24 +229,24 @@ macro_rules! evm_asm {
 macro_rules! evm_asm_vec {
     // Non-opcode variant matchers take precedent
     ($res:ident; Mark($expr:expr) $(, $($rest:tt)*)?) => {
-        $res.push(Asm::Mark($expr));
+        $res.push($crate::assembly::Asm::Mark($expr));
         $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
     ($res:ident; Data($lit:literal) $(, $($rest:tt)*)?) => {
-        $res.push(data!($lit));
+        $res.push($crate::data!($lit));
         $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
     ($res:ident; Ref($expr:expr) $(, $($rest:tt)*)?) => {
-        $res.push(Ref($expr));
+        $res.push($crate::assembly::Asm::Ref($expr));
         $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
     ($res:ident; Op($expr:expr) $(, $($rest:tt)*)?) => {
-        $res.push(Op($expr));
+        $res.push($crate::assembly::Asm::Op($expr));
         $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
     // Match any qualified Asm variants
     ($res:ident; Asm::$variant:ident($($expr:expr),*) $(, $($rest:tt)*)?) => {
-        $res.push(Asm::$variant($($expr),*));
+        $res.push($crate::assembly::Asm::$variant($($expr),*));
         $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
     // Allow for passing in var idents.
@@ -258,7 +258,7 @@ macro_rules! evm_asm_vec {
     ($res:ident; $head:expr $(, $($rest:tt)*)?) => {
         // TODO: Could further pattern match to allow for ambiguous functions / other types of
         // exprs.
-        $res.push(Op($head));
+        $res.push($crate::assembly::Asm::Op($head));
         $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
     // Terminal case: all tokens have been consumed
