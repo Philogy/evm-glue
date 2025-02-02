@@ -236,6 +236,10 @@ macro_rules! evm_asm_vec {
         $res.push($crate::data!($lit));
         $crate::evm_asm_vec!($res; $($($rest)*)?);
     };
+    ($res:ident; Data($expr:expr) $(, $($rest:tt)*)?) => {
+        $res.push($crate::assembly::Asm::Data($expr));
+        $crate::evm_asm_vec!($res; $($($rest)*)?);
+    };
     ($res:ident; Ref($expr:expr) $(, $($rest:tt)*)?) => {
         $res.push($crate::assembly::Asm::Ref($expr));
         $crate::evm_asm_vec!($res; $($($rest)*)?);
